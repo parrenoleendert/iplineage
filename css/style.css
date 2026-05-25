@@ -1,0 +1,238 @@
+html {
+    font-size: 14px;
+}
+
+body {
+    background-color: #f3f4f1;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 14px;
+}
+
+.f3 {
+    width: 100%;
+    height: 800px;
+    background-color: rgb(255, 255, 255);
+    color: #262626;
+    border-radius: 1rem;
+    overflow: hidden;
+    cursor: move;
+}
+
+.lineage-layout {
+    position: relative;
+}
+
+.profile-panel {
+    background: #ffffff;
+    border: 1px solid #d4d4d8;
+    border-radius: 16px;
+    box-shadow: 0 10px 24px rgba(39, 39, 42, 0.08);
+    padding: 16px;
+    min-height: 220px;
+    width: min(320px, calc(100% - 32px));
+    max-height: calc(100% - 32px);
+    overflow: auto;
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 20;
+}
+.profile-panel.is-hidden {
+    display: none;
+}
+
+.profile-title {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #111827;
+}
+
+.profile-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+    color: #374151;
+}
+
+.profile-row {
+    display: grid;
+    grid-template-columns: 84px 1fr;
+    gap: 8px;
+    align-items: start;
+}
+
+.profile-label {
+    color: #6b7280;
+    font-weight: 600;
+}
+
+.profile-value {
+    color: #111827;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.profile-section {
+    margin-top: 6px;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 10px;
+}
+
+.profile-section h3 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.profile-list {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #111827;
+}
+
+.profile-empty {
+    color: #9ca3af;
+    font-style: italic;
+}
+
+
+.f3 svg {
+    cursor: pointer !important;
+}
+
+.node-card {
+    min-width: 150px;
+    min-height: 230px;
+    border-radius: 14px;
+    border: 1px solid #d4d4d8;
+    background: linear-gradient(135deg, #ffffff 0%, #fafaf9 100%);
+    box-shadow: 0 8px 18px rgba(39, 39, 42, 0.08);
+    padding: 12px 14px;
+    color: #18181b;
+    cursor: pointer;
+}
+
+.node-card.node-male {
+    border-top: 6px solid #000000;
+}
+
+.node-card.node-female {
+    border-top: 6px solid #bebbbb;
+}
+
+.node-card.node-selected {
+    min-width: 140px;
+    min-height: 230px;
+    border: 1px solid #16a34a;
+    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.15), 0 14px 28px rgba(39, 39, 42, 0.18);
+    transform: scale(0.99);
+}
+
+
+.node-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 800;
+    margin: 0 auto 30px auto;
+    letter-spacing: 0.05em;
+}
+
+.node-avatar-male {
+    background-color: #4b4b4b;
+    color: #ffffff;
+    border: 2px solid #000000;
+}
+
+.node-avatar-female {
+    background-color: #ffffff;
+    color: #000000;
+    border: 2px solid #cacaca;
+}
+
+.node-avatar-unknown {
+    background-color: #f3f4f6;
+    color: #6b7280;
+    border: 2px solid #d1d5db;
+}
+
+.node-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.node-name {
+    font-size: 14px;
+    line-height: 1.2;
+    font-weight: 700;
+    color: #111827;
+    max-width: 165px;
+}
+
+.node-badge {
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 2px 8px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+
+.node-badge-male {
+    background-color: #dbeafe;
+    color: #000000;
+}
+
+.node-badge-female {
+    background-color: #fce7f3;
+    color: #dddddd;
+}
+
+.node-meta {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #52525b;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.node-relationship {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+/* family-chart defaults links to white; force visible lines on light background */
+.f3 svg .links_view path.link {
+    stroke: #64748b !important;
+    stroke-width: 2px !important;
+    opacity: 1 !important;
+}
+
+@media (max-width: 1024px) {
+    .profile-panel {
+        top: 12px;
+        right: 12px;
+        width: min(320px, calc(100% - 24px));
+        max-height: calc(100% - 24px);
+    }
+
+    .f3 {
+        height: 680px;
+    }
+}
+
