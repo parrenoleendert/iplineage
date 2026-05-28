@@ -1,7 +1,13 @@
 <?php
 require_once __DIR__ . '/auth/guards.php';
 require_any_role(['admin', 'tribe_leader', 'ip_member']);
-include 'dbconfig.php';
+
+require_once __DIR__ . '/dbconfig.php';
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    http_response_code(500);
+    die('Database connection not established. Check src/dbconfig.php and MySQL service.');
+}
 
 function first_existing_column(array $columns, array $candidates): ?string {
     foreach ($candidates as $candidate) {

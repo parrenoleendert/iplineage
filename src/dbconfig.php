@@ -28,6 +28,8 @@ if ($conn->connect_error) {
     die($error_msg);
 }
 
-// Set charset to utf8
+
 $conn->set_charset("utf8");
+
+$GLOBALS['conn'] = $conn;
 ?>

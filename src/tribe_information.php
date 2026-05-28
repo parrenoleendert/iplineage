@@ -2,8 +2,8 @@
 require_once __DIR__ . '/auth/guards.php';
 require_any_role(['admin', 'tribe_leader', 'ip_member']);
 
-//$conn error
 require_once __DIR__ . '/dbconfig.php';
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
 if (!isset($conn) || !($conn instanceof mysqli)) {
     http_response_code(500);
     die("Database connection not established. Check src/dbconfig.php and MySQL service.");
