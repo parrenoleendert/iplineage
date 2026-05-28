@@ -2,7 +2,13 @@
 require_once __DIR__ . '/auth/guards.php';
 require_once __DIR__ . '/auth/auth_helpers.php';
 require_any_role(['admin', 'tribe_leader']);
-include("dbconfig.php");
+
+require_once __DIR__ . '/dbconfig.php';
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    http_response_code(500);
+    die('Database connection not established. Check src/dbconfig.php and MySQL service.');
+}
 
 $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
 $isAdmin = $currentRole === 'admin';
