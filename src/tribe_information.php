@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/auth/guards.php';
 require_any_role(['admin', 'tribe_leader', 'ip_member']);
-
+#add
 require_once __DIR__ . '/dbconfig.php';
 $conn = $GLOBALS['conn'] ?? ($conn ?? null);
 if (!isset($conn) || !($conn instanceof mysqli)) {
