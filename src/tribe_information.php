@@ -42,7 +42,14 @@ $leader_result = mysqli_query($conn, $sql);
 
 $ipmembers = [];
 
-$sql = "SELECT member_name, member_id, tribe_clan, barangay, registration_date FROM ipmembers";
+$sql = "SELECT
+            TRIM(CONCAT_WS(' ', first_name, middle_name, last_name)) AS member_name,
+            ip_member_id,
+            member_id,
+            tribe_clan,
+            barangay,
+            registration_date
+        FROM ipmembers";
 $ip_result = mysqli_query($conn, $sql);
 
 if ($ip_result) {
