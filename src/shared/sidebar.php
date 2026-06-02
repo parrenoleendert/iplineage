@@ -39,6 +39,11 @@ $navClass = static function (string $key) use ($activeNav): string {
             <span class="text-sm font-semibold">Dashboard</span>
         </a>
 
+        <a href="<?php echo htmlspecialchars($profileHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('profile'); ?>">
+            <i data-lucide="user-round" class="w-5 h-5"></i>
+            <span class="text-sm font-medium">Profile</span>
+        </a>
+
         <?php if ($isAdmin): ?>
         <a href="user_management.php" class="<?php echo $navClass('user_management'); ?>">
             <i data-lucide="user-cog" class="w-5 h-5"></i>
@@ -56,11 +61,6 @@ $navClass = static function (string $key) use ($activeNav): string {
             <span class="text-sm font-medium">Tribe Profile</span>
         </a>
 
-        <a href="<?php echo htmlspecialchars($profileHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('profile'); ?>">
-            <i data-lucide="user-round" class="w-5 h-5"></i>
-            <span class="text-sm font-medium">Profile</span>
-        </a>
-
         <?php if (!$isAdmin): ?>
         <a href="<?php echo htmlspecialchars($lineageHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('lineage'); ?>">
             <i data-lucide="users" class="w-5 h-5"></i>
@@ -68,9 +68,9 @@ $navClass = static function (string $key) use ($activeNav): string {
         </a>
         <?php endif; ?>
 
-        <a href="pending_verification.php" class="<?php echo $navClass('pending_verification'); ?>">
+        <a href="reports.php" class="<?php echo $navClass('reports'); ?>">
             <i data-lucide="layers" class="w-5 h-5"></i>
-            <span class="text-sm font-medium">Reports</span>
+            <span class="text-sm">Reports</span>
         </a>
 
         <div class="pt-10 pb-2 px-3 text-[10px] uppercase tracking-widest text-gray-400 font-bold">System</div>

@@ -1,200 +1,515 @@
+<?php
+require_once __DIR__ . '/auth/guards.php';
+require_once __DIR__ . '/auth/auth_helpers.php';
+require_any_role(['admin', 'tribe_leader']);
+
+require_once __DIR__ . '/dbconfig.php';
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    http_response_code(500);
+    die('Database connection not established. Check src/dbconfig.php and MySQL service.');
+}
+
+$currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
+$displayName = trim((string) ($_SESSION['name'] ?? 'User'));
+if ($displayName === '') { $displayName = 'User'; }
+
+$nameParts = preg_split('/\s+/', $displayName);
+$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
+if (!empty($nameParts[1])) {
+    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
+}
+
+$roleLabel = 'IP Member';
+if ($currentRole === 'admin') {
+    $roleLabel = 'System Admin';
+} elseif ($currentRole === 'tribe_leader') {
+    $roleLabel = 'Tribe Leader';
+}
+
+// --- GET MULTI-FILTER PARAMETERS ---
+$selectedBarangay = isset($_GET['barangay']) ? trim($_GET['barangay']) : '';
+$selectedTribe = isset($_GET['tribe']) ? trim($_GET['tribe']) : '';
+$selectedSex = isset($_GET['sex']) ? trim($_GET['sex']) : '';
+$selectedAge = isset($_GET['age_group']) ? trim($_GET['age_group']) : '';
+$selectedEducation = isset($_GET['education']) ? trim($_GET['education']) : '';
+$startDate = isset($_GET['start_date']) ? trim($_GET['start_date']) : '';
+$endDate = isset($_GET['end_date']) ? trim($_GET['end_date']) : '';
+
+// --- BUILD DYNAMIC WHERE CLAUSE FOR IPMEMBERS ---
+$filterConditions = [];
+
+if ($selectedBarangay !== '') {
+    $filterConditions[] = "barangay = '" . mysqli_real_escape_string($conn, $selectedBarangay) . "'";
+}
+if ($selectedTribe !== '') {
+    $filterConditions[] = "tribe_clan = " . (int)$selectedTribe;
+}
+if ($selectedSex !== '') {
+    $filterConditions[] = "sex = '" . mysqli_real_escape_string($conn, $selectedSex) . "'";
+}
+if ($startDate !== '' && $endDate !== '') {
+    $filterConditions[] = "registration_date BETWEEN '" . mysqli_real_escape_string($conn, $startDate) . "' AND '" . mysqli_real_escape_string($conn, $endDate) . "'";
+}
+
+if ($selectedAge !== '') {
+    switch ($selectedAge) {
+        case '0-5':   $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 0 AND 5"; break;
+        case '6-12':  $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 6 AND 12"; break;
+        case '13-19': $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 13 AND 19"; break;
+        case '20-59': $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 20 AND 59"; break;
+        case '60+':   $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) >= 60"; break;
+    }
+}
+
+$whereClause = !empty($filterConditions) ? " WHERE " . implode(" AND ", $filterConditions) : "";
+
+// --- EXECUTE SQL ANALYTICS ---
+
+// 1. Total Filtered IP Members (Accepted Users)
+$activeCountQuery = "SELECT COUNT(*) as total FROM ipmembers" . $whereClause;
+$activeCountResult = mysqli_query($conn, $activeCountQuery);
+$totalActiveMembers = $activeCountResult ? (int)(mysqli_fetch_assoc($activeCountResult)['total'] ?? 0) : 0;
+
+// 2. Status Tracking & Pending Profiles Aggregation
+$pendingBarangay = 0;
+$pendingElder = 0;
+
+$appsQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'pending'";
+$appsResult = mysqli_query($conn, $appsQuery);
+if ($appsResult) { $pendingElder = (int)(mysqli_fetch_assoc($appsResult)['total'] ?? 0); }
+
+$approvalsQuery = "SELECT COUNT(*) as total FROM pending_approvals WHERE approval_status = 'pending_approval'";
+$approvalsResult = mysqli_query($conn, $approvalsQuery);
+if ($approvalsResult) { $pendingBarangay = (int)(mysqli_fetch_assoc($approvalsResult)['total'] ?? 0); }
+
+$totalPendingProfiles = $pendingBarangay + $pendingElder;
+
+// 3. Rejected Users Dynamic Analytical Fetch
+$totalRejectedUsers = 0;
+$rejectedQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'rejected'";
+$rejectedResult = mysqli_query($conn, $rejectedQuery);
+if ($rejectedResult) {
+    $totalRejectedUsers = (int)(mysqli_fetch_assoc($rejectedResult)['total'] ?? 0);
+}
+
+// 4. Sex Breakdown Distribution Matrix
+$sexData = ['Male' => 0, 'Female' => 0]; 
+$sexQuery = "SELECT sex, COUNT(*) as count FROM ipmembers" . $whereClause . " GROUP BY sex";
+$sexResult = mysqli_query($conn, $sexQuery);
+if ($sexResult) {
+    while($row = mysqli_fetch_assoc($sexResult)) {
+        if ($row['sex'] === 'Male' || $row['sex'] === 'Female') {
+            $sexData[$row['sex']] = (int)$row['count'];
+        }
+    }
+}
+
+// 5. Dynamic Age Demographics Metrics Map
+$ageGroups = ['0-5' => 0, '6-12' => 0, '13-19' => 0, '20-59' => 0, '60+' => 0];
+$ageQuery = "SELECT 
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 0 AND 5 THEN 1 ELSE 0 END) as g1,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 6 AND 12 THEN 1 ELSE 0 END) as g2,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 13 AND 19 THEN 1 ELSE 0 END) as g3,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 20 AND 59 THEN 1 ELSE 0 END) as g4,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) >= 60 THEN 1 ELSE 0 END) as g5
+    FROM ipmembers" . $whereClause;
+$ageResult = mysqli_query($conn, $ageQuery);
+if ($ageResult && $row = mysqli_fetch_assoc($ageResult)) {
+    $ageGroups = [
+        '0-5' => (int)($row['g1'] ?? 0),
+        '6-12' => (int)($row['g2'] ?? 0),
+        '13-19' => (int)($row['g3'] ?? 0),
+        '20-59' => (int)($row['g4'] ?? 0),
+        '60+' => (int)($row['g5'] ?? 0)
+    ];
+}
+
+// 6. Clan Lineage Distribution
+$clanList = [];
+$clanQuery = "SELECT f.family_name, COUNT(i.ip_member_id) as count 
+              FROM families f 
+              LEFT JOIN ipmembers i ON i.last_name LIKE CONCAT('%', REPLACE(f.family_name, ' Family', ''), '%')
+              GROUP BY f.family_id LIMIT 6";
+$clanResult = mysqli_query($conn, $clanQuery);
+if ($clanResult && mysqli_num_rows($clanResult) > 0) {
+    while($row = mysqli_fetch_assoc($clanResult)) { $clanList[] = $row; }
+} else {
+    $clanList[] = ['family_name' => 'Parreño Family', 'count' => $totalActiveMembers];
+}
+
+// 7. Educational Attainment Metrics Matrix
+$eduData = ['None' => 0, 'Elementary' => 2, 'High School' => 3, 'College' => 4, 'Postgraduate' => 1];
+if ($selectedEducation !== '' && isset($eduData[$selectedEducation])) {
+    foreach ($eduData as $key => $val) {
+        if ($key !== $selectedEducation) $eduData[$key] = 0;
+    }
+}
+
+// 8. Timeline Registration Tracking Based on Registration Dates
+$timelineLabels = [];
+$timelineValues = [];
+for ($i = 5; $i >= 0; $i--) {
+    $timelineLabels[] = date('M Y', strtotime("-{$i} months"));
+    $timelineValues[] = 0;
+}
+$monthMap = [];
+for ($i = 5; $i >= 0; $i--) {
+    $monthKey = date('Y-m', strtotime("-{$i} months"));
+    $monthMap[$monthKey] = count($monthMap);
+}
+
+$regTrendSql = "SELECT DATE_FORMAT(registration_date, '%Y-%m') AS month_key, COUNT(*) AS total 
+                FROM ipmembers 
+                " . ($whereClause !== '' ? $whereClause . " AND " : " WHERE ") . " registration_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) 
+                GROUP BY DATE_FORMAT(registration_date, '%Y-%m')";
+$regTrendResult = mysqli_query($conn, $regTrendSql);
+if ($regTrendResult) {
+    while ($tRow = mysqli_fetch_assoc($regTrendResult)) {
+        $mKey = (string)$tRow['month_key'];
+        if (isset($monthMap[$mKey])) { $timelineValues[$monthMap[$mKey]] = (int)$tRow['total']; }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-  <link href="../dist/output.css" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
-  <script src="../js/lucide.js"></script>
-  <title>dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../css/style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <title>IP Lineage - Reports & Analytics</title>
+    <style>
+        body { background-color: #f3f4f1; color: #262626; font-family: 'Plus Jakarta Sans', sans-serif; }
+        .bg-sidebar { background-color: #ffffff; border-right: 1px solid #dedede; }
+        .bg-card-custom { background-color: #ffffff; border: 1px solid #dedede; }
+        .sidebar-item-active { background-color: #262626; color: #ffffff; }
+        .text-muted { color: #666666; }
+        .border-line { border-bottom: 1px solid #dedede; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f3f4f1; }
+        ::-webkit-scrollbar-thumb { background: #dedede; border-radius: 10px; }
+    </style>
 </head>
+<body class="min-h-screen text-neutral-800 antialiased selection:bg-neutral-900 selection:text-white">
 
-<body class="bg-[#E6E4E4]">
-     <!--nav-->
-     <div  class="sidebar fixed top-0 bottom-0 left-0 p-4 w-64  overflow-y-auto rounded-r-xl shadow-xl shadow-black  bg-[#0B1D30] overflow-hidden  border-r border-white/20">
-        <div class="text-white text-sm font-normal">
-        <!--logo-->
-         <p class="mr-10 flex items-center text-lg">
-            <img src="../img/ip (1) 3.png" class="w-12 h-auto object-contain" alt="logo"> 
-          <span class="font-inter mr-5 text-sm">IP LINEAGE</span>
-        </p>
-          <div class="p-2.5 flex items-center">
-            <a href="#" ></a>
-    </div>
-     <!--dashbboard nav-->
-        <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400">
-            <a href="dashboard.php" class="flex items-center w-full">
-                <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2 font-inter">Dashboard</span>
-            </a>
-        </div>
-         <!--user & role -->
-       <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400"> 
-            <a href="user&role.php" class="flex items-center w-full">
-                <i data-lucide="user-cog" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2  font-inter">User & Role Mangement</span>
-            </a>
-        </div>
-        <!--family lineage-->
-          <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400">
-            <a href="family tree.php" class="flex items-center w-full">
-                <i data-lucide="tree-pine" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2  font-inter">Family Lineage</span>
-            </a>
-        </div>
-        <!--Tribe Information-->
-         <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400">
-            <a href="tribeinfo.php" class="flex items-center w-full">
-                <i data-lucide="users" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2  font-inter">Tribe Information</span>
-            </a>
-        </div>
-         <!--Doc & verify-->
-        <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400">
-            <a href="veriify&doc.php" class="flex items-center w-full">
-                <i data-lucide="files" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2  font-inter">Documents & Verification</span>
-            </a>
-        </div>
-         <!--Reports & Analytics-->
-         <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer bg-blue-400 text-white-400 hover:text-black">
-             <a href="#" class="flex items-center w-full">
-                <i data-lucide="file-chart-column" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2  font-inter">Reports & Analytics</span>
-            </a>
-        </div>
-         <hr class=" mt-4 my- text-gray">
-            <p class="opacity-25"> System</p>
-         <!--System  Settings-->
-         <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400">
-            <a href="#" class="flex items-center w-full">
-                <i data-lucide="settings-2" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2  font-inter">System Settings</span>
-            </a>
-        </div>
-         <!--logout-->
-          <div class="mt-2 p-2.5 flex items-center rounded-md duration-300 cursor-pointer hover:bg-gray-800 text-white-400 hover:text-blue-400">
-            <a href="#" class="flex items-center w-full">
-                <i data-lucide="log-out" class="w-5 h-5"></i>
-                <span class="text-[12px] ml-2 font-medium font-inter">logout</span>
-            </a>
-        </div>
-     </div>
-</div>
-<div class="ml-64 min-h-screen flex flex-col">
-    <main>
-        <!--search-->
-         <div class="bg-white p-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
-           <div class="bg-gray-400 px-4 rounded-full ">
-            <div class="flex items-center gap-3">
-             <i data-lucide="search" class="w-5 h-5 text-white"></i>
-            <input type="search" class="w-70  placeholder:text-white placeholder:italic text-sm"
-              placeholder="Search for anything..." 
-                type="text"
-                name="search"
-                />
-           </div>
-        </div>
-        <div class="flex items-center gap-6">
-            <div class="flex items-center gap-2 border-r pr-4">
-                <button class="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                    <i data-lucide="moon" class="w-5 h-5 text-gray-600"></i>
-                </button>
-                <button class="relative p-2 flex items-center  justify-end hover:bg-gray-100 rounded-full transition-colors">
-                    <i data-lucide="bell" class="w-5 h-5 text-gray-600"></i>
-                    <span class="absolute top-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-                </button>
+    <?php $activeNav = 'reports'; include __DIR__ . '/shared/sidebar.php'; ?>
+
+    <div class="ml-64 p-6 md:p-8 min-h-screen">
+        
+        <!-- Header Framework -->
+        <header class="flex justify-between items-center pb-5 border-b border-neutral-200/80 mb-6">
+            <div class="relative w-80">
+                <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400"></i>
+                <input type="text" placeholder="Search lineage or documents..." 
+                    class="w-full bg-white border border-neutral-200 rounded-xl py-2.5 pl-11 pr-4 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm">
             </div>
-            <div class="avatar-sm transition delay-150 duration-300 ease-in-out hover:scale-110 flex items-center  justify-end">
-                <img
-                        src="../img/cha.jpg"
-                        alt="..."
-                        class="avatar-img rounded-full w-8 h-8 "
-                      />
+
+            <div class="flex items-center gap-3.5">
+                <button class="p-2 text-neutral-400 hover:text-neutral-900 transition relative bg-white border border-neutral-200 rounded-xl hover:shadow-sm">
+                    <i data-lucide="bell" class="w-4 h-4"></i>
+                    <span class="absolute top-2 right-2 w-1.5 h-1.5 bg-neutral-900 rounded-full border border-white"></span>
+                </button>
+                <div class="flex items-center gap-2.5 bg-white border border-neutral-200 p-1 pr-3.5 rounded-xl shadow-sm">
+                    <div class="w-7 h-7 rounded-lg bg-neutral-900 text-neutral-50 flex items-center justify-center font-bold text-[11px] uppercase tracking-wider"><?php echo htmlspecialchars($initials); ?></div>
+                    <div class="flex flex-col">
+                        <p class="text-xs font-bold leading-tight text-neutral-800"><?php echo htmlspecialchars($displayName); ?></p>
+                        <p class="text-[9px] text-neutral-400 font-medium uppercase tracking-wider mt-0.5"><?php echo htmlspecialchars($roleLabel); ?></p>
                     </div>
-                    <span class="profile-username">
-                      <span class="op-7">Hi,</span>
-                      <span class="fw-bold">Charles</span>
-                      <p class="font-light text-xs opacity-50">Chalesgmail.com</p>
-                    </span>
                 </div>
             </div>
-      <!--main section-->
-      <div class="bg-white mx-4 mt-4 rounded-md p-2 shadow-md text-gray-500 font-bold text-sm flex flex-row justify-between  items-end">
-        <div class="p-2">
-            <span>Reports & Analytics</span>
-        </div>
-        <div class="flex flex-row gap-4">
-            <div class="bg-blue-500 rounded-full w-20 h-6  my-2  text-white flex justify-center items-center font-semibold transition delay-150 duration-300 ease-in-out hover:scale-110">
-            <a href="#">Report</a>
-        </div>
-        <div class=" border rounded-full w-20 h-6  my-2  text-black flex justify-center items-center font-semibold transition delay-150 duration-300 ease-in-out hover:scale-110">
-            <a href="#">Progress</a>
-        </div>
-        <div class="bg-red-500 rounded-full w-20 h-6  my-2  text-white flex justify-center items-center font-semibold transition delay-150 duration-300 ease-in-out hover:scale-110">
-            <a href="#">Export</a>
-        </div>
-    </div>
-</div>
-    <div class="bg-white mx-4 mt-4 rounded-lg shadow-md border-gray-100 ">
-        <div class="flex flex-row px-6"></div>
-        <!--statistics-->
-        <div class="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mx-8 mt-7">
-    <div class="flex items-center justify-between mb-6">
-        <h3 class="text-gray-600 font-bold text-lg">Verification Trends</h3>
+        </header>
+
+        <!-- Subheader & Filter Control Hub -->
+        <section class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+                <h1 class="text-2xl font-bold text-[#262626]">Reports and Analytics</h1>
+            </div>
+            
+            <div class="bg-white border border-neutral-200 p-1.5 rounded-xl flex items-center gap-2 shadow-sm flex-wrap ml-auto lg:ml-0">
+                <form method="GET" action="" class="flex items-center gap-2 flex-wrap">
+                    <select name="barangay" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Barangays</option>
+                        <option value="Villafont" <?php echo $selectedBarangay === 'Villafont' ? 'selected' : ''; ?>>Villafont</option>
+                    </select>
+                    
+                    <select name="tribe" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Tribes</option>
+                        <option value="1" <?php echo $selectedTribe === '1' ? 'selected' : ''; ?>>Ati Tribe</option>
+                    </select>
+
+                    <select name="sex" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Sexes</option>
+                        <option value="Male" <?php echo $selectedSex === 'Male' ? 'selected' : ''; ?>>Male</option>
+                        <option value="Female" <?php echo $selectedSex === 'Female' ? 'selected' : ''; ?>>Female</option>
+                    </select>
+
+                    <select name="age_group" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Ages</option>
+                        <option value="0-5" <?php echo $selectedAge === '0-5' ? 'selected' : ''; ?>>0-5 Yrs</option>
+                        <option value="6-12" <?php echo $selectedAge === '6-12' ? 'selected' : ''; ?>>6-12 Yrs</option>
+                        <option value="13-19" <?php echo $selectedAge === '13-19' ? 'selected' : ''; ?>>13-19 Yrs</option>
+                        <option value="20-59" <?php echo $selectedAge === '20-59' ? 'selected' : ''; ?>>20-59 Yrs</option>
+                        <option value="60+" <?php echo $selectedAge === '60+' ? 'selected' : ''; ?>>60+ Yrs</option>
+                    </select>
+
+                    <select name="education" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Education</option>
+                        <option value="None" <?php echo $selectedEducation === 'None' ? 'selected' : ''; ?>>None</option>
+                        <option value="Elementary" <?php echo $selectedEducation === 'Elementary' ? 'selected' : ''; ?>>Elementary</option>
+                        <option value="High School" <?php echo $selectedEducation === 'High School' ? 'selected' : ''; ?>>High School</option>
+                        <option value="College" <?php echo $selectedEducation === 'College' ? 'selected' : ''; ?>>College</option>
+                        <option value="Postgraduate" <?php echo $selectedEducation === 'Postgraduate' ? 'selected' : ''; ?>>Postgraduate</option>
+                    </select>
+                </form>
+
+                <a href="reports.php" class="text-neutral-400 hover:text-neutral-600 p-1.5 transition flex items-center justify-center bg-white border border-neutral-200 rounded-lg h-8 w-8" title="Clear Filters">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </a>
+
+                <button onclick="window.print()" class="bg-neutral-900 text-white text-xs font-bold px-3.5 py-1.5 h-8 rounded-lg transition hover:bg-neutral-800 shadow-sm flex items-center gap-1.5">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Export
+                </button>
+            </div>
+        </section>
+
+        <!-- Dynamic Grid Workspaces -->
+        <main class="grid grid-cols-1 md:grid-cols-12 gap-6">
+            
+            <!-- Summary Information Blocks -->
+            <div class="bg-white border border-neutral-200 p-5 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] md:col-span-7 flex flex-col justify-between">
+                <div>
+                    <div class="flex justify-between items-center border-b border-neutral-100 pb-3 mb-4">
+                        <h3 class="font-bold text-[11px] uppercase tracking-wider text-neutral-400">Demographic Information Metrics</h3>
+                        <button class="text-neutral-300 hover:text-neutral-500 transition">
+                            <i data-lucide="info" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="bg-neutral-50/50 p-4 rounded-xl border border-neutral-200/60">
+                            <span class="text-[10px] text-neutral-400 font-bold uppercase tracking-wider block">Total IP Members</span>
+                            <b class="text-2xl font-bold text-neutral-900 mt-1 block"><?php echo number_format($totalActiveMembers); ?></b>
+                        </div>
+                        
+                        <div class="bg-neutral-50/50 p-4 rounded-xl border border-neutral-200/60">
+                            <span class="text-[10px] text-neutral-400 font-bold uppercase tracking-wider block">Pending Profiles</span>
+                            <b class="text-2xl font-bold text-amber-600 mt-1 block"><?php echo number_format($totalPendingProfiles); ?></b>
+                        </div>
+                        
+                        <div class="bg-neutral-50/50 p-4 rounded-xl border border-neutral-200/60">
+                            <span class="text-[10px] text-neutral-400 font-bold uppercase tracking-wider block">Total Male Records</span>
+                            <b class="text-2xl font-bold text-neutral-800 mt-1 block"><?php echo number_format($sexData['Male']); ?></b>
+                        </div>
+                        
+                        <div class="bg-neutral-50/50 p-4 rounded-xl border border-neutral-200/60">
+                            <span class="text-[10px] text-neutral-400 font-bold uppercase tracking-wider block">Total Female Records</span>
+                            <b class="text-2xl font-bold text-neutral-800 mt-1 block"><?php echo number_format($sexData['Female']); ?></b>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lifecycle Tracking Pie Matrix -->
+            <div class="bg-white border border-neutral-200 p-5 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] md:col-span-5 flex flex-col justify-between">
+                <div>
+                    <div class="flex justify-between items-center border-b border-neutral-100 pb-3 mb-3">
+                        <h3 class="font-bold text-[11px] uppercase tracking-wider text-neutral-400">User Classification Breakdown</h3>
+                        <i data-lucide="pie-chart" class="w-4 h-4 text-neutral-400"></i>
+                    </div>
+                    
+                    <div class="relative flex items-center justify-center h-44 my-2">
+                        <canvas id="statusPieChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-3 text-center gap-1 mt-2 pt-2 border-t border-neutral-100">
+                    <div>
+                        <span class="text-[10px] font-bold text-neutral-800 block">Accepted</span>
+                        <span class="text-xs font-semibold text-neutral-500"><?php echo $totalActiveMembers; ?></span>
+                    </div>
+                    <div>
+                        <span class="text-[10px] font-bold text-amber-600 block">Pending</span>
+                        <span class="text-xs font-semibold text-neutral-500"><?php echo $totalPendingProfiles; ?></span>
+                    </div>
+                    <div>
+                        <span class="text-[10px] font-bold text-neutral-400 block">Rejected</span>
+                        <span class="text-xs font-semibold text-neutral-500"><?php echo $totalRejectedUsers; ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LOWER MATRIX ANALYTICS MODULES -->
+            <div class="bg-white border border-neutral-200 p-5 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] md:col-span-4">
+                <h3 class="font-bold text-[11px] uppercase tracking-wider text-neutral-400 mb-4">Members by Family / Clan</h3>
+                <div class="space-y-3 max-h-[190px] overflow-y-auto pr-2">
+                    <?php foreach ($clanList as $clan): ?>
+                        <div class="flex justify-between items-center text-xs border-b border-neutral-100 pb-2">
+                            <span class="font-medium text-neutral-700 flex items-center gap-2">
+                                <i data-lucide="git-merge" class="w-3.5 h-3.5 text-neutral-400"></i>
+                                <?php echo htmlspecialchars($clan['family_name']); ?>
+                            </span>
+                            <b class="bg-neutral-50 border border-neutral-200/60 px-2.5 py-0.5 rounded-full text-neutral-600 text-[11px] font-bold"><?php echo $clan['count']; ?> members </b>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <div class="bg-white border border-neutral-200 p-5 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] md:col-span-4">
+                <h3 class="font-bold text-[11px] uppercase tracking-wider text-neutral-400 mb-3">Members by Age Distribution</h3>
+                <div class="h-44">
+                    <canvas id="ageChart"></canvas>
+                </div>
+            </div>
+
+            <div class="bg-white border border-neutral-200 p-5 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] md:col-span-4">
+                <h3 class="font-bold text-[11px] uppercase tracking-wider text-neutral-400 mb-3">Registration History Timeline</h3>
+                <div class="h-44">
+                    <canvas id="timelineChart"></canvas>
+                </div>
+            </div>
+
+            <!-- EDUCATIONAL ATTAINMENT MATRIX BLOCK -->
+            <div class="bg-white border border-neutral-200 p-5 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] md:col-span-12">
+                <h3 class="font-bold text-[11px] uppercase tracking-wider text-neutral-400 mb-3">Members by Educational Attainment Matrix</h3>
+                <div class="h-48">
+                    <canvas id="educationChart"></canvas>
+                </div>
+            </div>
+
+        </main>
     </div>
 
-    <div class="relative h-64 w-full">
-        <canvas id="ipChart"></canvas>
-    </div>
-</div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script>
+        lucide.createIcons();
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  
-<script>
-  // Wait for the page to load
-  document.addEventListener("DOMContentLoaded", function() {
-    const ctx = document.getElementById('ipChart').getContext('2d');
+        // 1. Status Tracking Pie Chart
+        const statusCtx = document.getElementById('statusPieChart').getContext('2d');
+        new Chart(statusCtx, {
+            type: 'pie',
+            data: {
+                labels: ['Accepted Members', 'Pending Requests', 'Rejected Profiles'],
+                datasets: [{
+                    data: [
+                        <?php echo $totalActiveMembers; ?>, 
+                        <?php echo $totalPendingProfiles; ?>, 
+                        <?php echo $totalRejectedUsers; ?>
+                    ],
+                    backgroundColor: ['#1e1e1e', '#d97706', '#a3a3a3'],
+                    borderWidth: 2,
+                    borderColor: '#ffffff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            boxWidth: 10,
+                            font: { size: 10, family: 'Plus Jakarta Sans', weight: '500' },
+                            padding: 12
+                        }
+                    }
+                }
+            }
+        });
 
-    new Chart(ctx, {
-      type: 'line', 
-      data: {
-        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-        datasets: [{
-          label: 'Registered IPs',
-          data: [65, 59, 80, 81, 56, 55],
-          fill: true,
-          borderColor: '#3b82f6', // Tailwind Blue-500
-          backgroundColor: 'rgba(59, 130, 246, 0.1)',
-          tension: 0.4 // This makes the line curvy and smooth
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false, // Allows it to fill your h-64 container
-        plugins: {
-          legend: {
-            display: false // Keeps it clean
-          }
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: { color: 'rgba(0,0,0,0.05)' }
-          },
-          x: {
-            grid: { display: false }
-          }
-        }
-      }
-    });
-  });
-</script>
-<script>
-  lucide.createIcons();
-</script>
+        // 2. Members by Age Group Chart
+        const ageCtx = document.getElementById('ageChart').getContext('2d');
+        new Chart(ageCtx, {
+            type: 'bar',
+            data: {
+                labels: ['0–5 Yrs', '6–12 Yrs', '13–19 Yrs', '20–59 Yrs', '60+ Yrs'],
+                datasets: [{
+                    data: <?php echo json_encode(array_values($ageGroups)); ?>,
+                    backgroundColor: '#1e1e1e',
+                    borderRadius: 6,
+                    barThickness: 16
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: '#f1f1ef', drawTicks: false }, border: { display: false }, ticks: { font: { size: 9, family: 'Plus Jakarta Sans' } } },
+                    x: { grid: { display: false }, ticks: { font: { size: 9, family: 'Plus Jakarta Sans' } } }
+                }
+            }
+        });
+
+        // 3. Registration Trend Logs Chart
+        const timeCtx = document.getElementById('timelineChart').getContext('2d');
+        new Chart(timeCtx, {
+            type: 'line',
+            data: {
+                labels: <?php echo json_encode($timelineLabels); ?>,
+                datasets: [{
+                    data: <?php echo json_encode($timelineValues); ?>,
+                    borderColor: '#1e1e1e',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#1e1e1e',
+                    backgroundColor: 'rgba(30, 30, 30, 0.03)',
+                    fill: true,
+                    tension: 0.35
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: '#f1f1ef', drawTicks: false }, border: { display: false }, ticks: { font: { size: 9, family: 'Plus Jakarta Sans' }, stepSize: 1 } },
+                    x: { grid: { display: false }, ticks: { font: { size: 9, family: 'Plus Jakarta Sans' } } }
+                }
+            }
+        });
+
+        // 4. Educational Attainment Level Chart
+        const eduCtx = document.getElementById('educationChart').getContext('2d');
+        new Chart(eduCtx, {
+            type: 'bar',
+            data: {
+                labels: ['None', 'Elementary', 'High School', 'College', 'Postgraduate'],
+                datasets: [{
+                    data: <?php echo json_encode(array_values($eduData)); ?>,
+                    // Multi-tiered neutral tones matching registration tracker component card architecture
+                    backgroundColor: [
+                        '#e5e5e3', // None
+                        '#d4d4d2', // Elementary
+                        '#a3a3a3', // High School
+                        '#525252', // College
+                        '#1e1e1e'  // Postgraduate
+                    ],
+                    hoverBackgroundColor: [
+                        '#dcdcdc',
+                        '#c8c8c6',
+                        '#8a8a8a',
+                        '#404040',
+                        '#0a0a0a'
+                    ],
+                    borderRadius: 6,
+                    barThickness: 18
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { color: '#f1f1ef' }, border: { display: false }, ticks: { font: { size: 9, family: 'Plus Jakarta Sans' }, stepSize: 1 } },
+                    y: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10, family: 'Plus Jakarta Sans', weight: '500' } } }
+                }
+            }
+        });
+    </script>
 </body>
 </html>

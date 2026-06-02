@@ -15,9 +15,13 @@ function first_existing_column(array $columns, array $candidates): ?string {
             return $candidate;
         }
     }
-
     return null;
 }
+
+$currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
+
+$dashboardOuterClass = 'ml-64 p-8';
+$dashboardInnerClass = '';
 
 $displayName = trim((string) ($_SESSION['name'] ?? 'User'));
 if ($displayName === '') {
@@ -128,7 +132,6 @@ if (
                 $params[] = $postedLastName;
                 $types .= 's';
             }
-
             if ($nameColumn !== null) {
                 $updates[] = $nameColumn . ' = ?';
                 $params[] = $combinedPostedName;
@@ -236,33 +239,20 @@ if ($userId > 0 && $idColumn !== null) {
             $rowStatus = trim((string) ($row['status'] ?? ''));
             $rowLastActive = trim((string) ($row['last_active'] ?? ''));
 
-            if ($rowFirstName !== '') {
-                $firstName = $rowFirstName;
-            }
-            if ($rowMiddleName !== '') {
-                $middleName = $rowMiddleName;
-            }
-            if ($rowLastName !== '') {
-                $lastName = $rowLastName;
-            }
-
-            if ($rowName !== '') {
-                $displayName = $rowName;
-            }
+            if ($rowFirstName !== '') $firstName = $rowFirstName;
+            if ($rowMiddleName !== '') $middleName = $rowMiddleName;
+            if ($rowLastName !== '') $lastName = $rowLastName;
+            if ($rowName !== '') $displayName = $rowName;
+            
             if ($displayName === '' && ($firstName !== '' || $middleName !== '' || $lastName !== '')) {
                 $displayName = trim(implode(' ', array_filter([$firstName, $middleName, $lastName], static function ($value) {
                     return $value !== '';
                 })));
             }
-            if ($rowEmail !== '') {
-                $email = $rowEmail;
-            }
-            if ($rowJurisdiction !== '') {
-                $jurisdiction = $rowJurisdiction;
-            }
-            if ($rowStatus !== '') {
-                $status = $rowStatus;
-            }
+            if ($rowEmail !== '') $email = $rowEmail;
+            if ($rowJurisdiction !== '') $jurisdiction = $rowJurisdiction;
+            if ($rowStatus !== '') $status = $rowStatus;
+            
             if ($rowLastActive !== '') {
                 $timestamp = strtotime($rowLastActive);
                 if ($timestamp !== false) {
@@ -287,9 +277,7 @@ if ($userId > 0 && $idColumn !== null) {
 
 if ($firstName === '' || $lastName === '') {
     $namePartsFromDisplay = preg_split('/\s+/', trim($displayName));
-    if ($firstName === '') {
-        $firstName = (string) ($namePartsFromDisplay[0] ?? '');
-    }
+    if ($firstName === '') $firstName = (string) ($namePartsFromDisplay[0] ?? '');
     if ($middleName === '' && count($namePartsFromDisplay) > 2) {
         $middleName = trim(implode(' ', array_slice($namePartsFromDisplay, 1, -1)));
     }
@@ -328,27 +316,17 @@ $relTypeColumn = first_existing_column($relationshipColumns, ['relationship_type
 if ($ipKeyColumn !== null && $relMemberColumn !== null && $relRelatedColumn !== null && $relTypeColumn !== null) {
     $memberNameMap = [];
     $memberSelectParts = ["`{$ipKeyColumn}` AS member_key"];
-    if ($ipFirstNameColumn !== null) {
-        $memberSelectParts[] = "`{$ipFirstNameColumn}` AS first_name";
-    }
-    if ($ipMiddleNameColumn !== null) {
-        $memberSelectParts[] = "`{$ipMiddleNameColumn}` AS middle_name";
-    }
-    if ($ipLastNameColumn !== null) {
-        $memberSelectParts[] = "`{$ipLastNameColumn}` AS last_name";
-    }
-    if ($ipLegacyNameColumn !== null) {
-        $memberSelectParts[] = "`{$ipLegacyNameColumn}` AS legacy_name";
-    }
+    if ($ipFirstNameColumn !== null) $memberSelectParts[] = "`{$ipFirstNameColumn}` AS first_name";
+    if ($ipMiddleNameColumn !== null) $memberSelectParts[] = "`{$ipMiddleNameColumn}` AS middle_name";
+    if ($ipLastNameColumn !== null) $memberSelectParts[] = "`{$ipLastNameColumn}` AS last_name";
+    if ($ipLegacyNameColumn !== null) $memberSelectParts[] = "`{$ipLegacyNameColumn}` AS legacy_name";
 
     $allMembersSql = 'SELECT ' . implode(', ', $memberSelectParts) . ' FROM ipmembers';
     $allMembersResult = $conn->query($allMembersSql);
     if ($allMembersResult instanceof mysqli_result) {
         while ($memberRow = $allMembersResult->fetch_assoc()) {
             $memberKey = (string) ($memberRow['member_key'] ?? '');
-            if ($memberKey === '') {
-                continue;
-            }
+            if ($memberKey === '') continue;
 
             $memberFirst = trim((string) ($memberRow['first_name'] ?? ''));
             $memberMiddle = trim((string) ($memberRow['middle_name'] ?? ''));
@@ -360,7 +338,6 @@ if ($ipKeyColumn !== null && $relMemberColumn !== null && $relRelatedColumn !== 
             if ($resolvedName === '') {
                 $resolvedName = $memberLegacy !== '' ? $memberLegacy : ('Member #' . $memberKey);
             }
-
             $memberNameMap[$memberKey] = $resolvedName;
         }
     }
@@ -384,9 +361,7 @@ if ($ipKeyColumn !== null && $relMemberColumn !== null && $relRelatedColumn !== 
 
     if ($currentMemberKey === '' && $displayName !== '') {
         $findByNameWhere = [];
-        if ($ipLegacyNameColumn !== null) {
-            $findByNameWhere[] = "TRIM(`{$ipLegacyNameColumn}`) = ?";
-        }
+        if ($ipLegacyNameColumn !== null) $findByNameWhere[] = "TRIM(`{$ipLegacyNameColumn}`) = ?";
         if ($ipFirstNameColumn !== null || $ipLastNameColumn !== null) {
             $firstExpr = $ipFirstNameColumn !== null ? "`{$ipFirstNameColumn}`" : "''";
             $middleExpr = $ipMiddleNameColumn !== null ? "`{$ipMiddleNameColumn}`" : "''";
@@ -424,26 +399,18 @@ if ($ipKeyColumn !== null && $relMemberColumn !== null && $relRelatedColumn !== 
             $familyResult = $familyStmt->get_result();
 
             $addUniqueName = static function (array &$bucket, string $name): void {
-                if ($name === '') {
-                    return;
-                }
+                if ($name === '') return;
                 if (!in_array($name, $bucket, true)) {
                     $bucket[] = $name;
                 }
             };
 
             while ($familyRow = $familyResult instanceof mysqli_result ? $familyResult->fetch_assoc() : null) {
-                if (!$familyRow) {
-                    break;
-                }
-
                 $sourceId = (string) ($familyRow['source_id'] ?? '');
                 $targetId = (string) ($familyRow['target_id'] ?? '');
                 $relType = strtolower(trim((string) ($familyRow['rel_type'] ?? '')));
 
-                if ($sourceId === '' || $targetId === '') {
-                    continue;
-                }
+                if ($sourceId === '' || $targetId === '') continue;
 
                 $sourceName = (string) ($memberNameMap[$sourceId] ?? ('Member #' . $sourceId));
                 $targetName = (string) ($memberNameMap[$targetId] ?? ('Member #' . $targetId));
@@ -468,7 +435,6 @@ if ($ipKeyColumn !== null && $relMemberColumn !== null && $relRelatedColumn !== 
                     }
                 }
             }
-
             $familyStmt->close();
         }
     }
@@ -484,9 +450,9 @@ if (!empty($nameParts[1])) {
     $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
 }
 
-$statusClass = 'bg-gray-100 text-gray-600';
+$statusClass = 'bg-neutral-100 text-neutral-600 border border-neutral-200/60';
 if (strtolower($status) === 'online') {
-    $statusClass = 'bg-green-100 text-green-700';
+    $statusClass = 'bg-emerald-50 text-emerald-700 border border-emerald-200/50';
 }
 ?>
 
@@ -495,193 +461,263 @@ if (strtolower($status) === 'online') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../css/style.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <title>IP Lineage - Profile</title>
+    <title>IP Lineage - My Profile</title>
     <style>
-        body { background-color: #f3f4f1; font-family: 'Plus Jakarta Sans', sans-serif; }
-        .cover-gradient {
-            background: linear-gradient(120deg, #262626 0%, #525252 45%, #a3a3a3 100%);
-        }
+        body { background-color: #f3f4f1; color: #262626; font-family: 'Plus Jakarta Sans', sans-serif; }
+        .bg-sidebar { background-color: #ffffff; border-right: 1px solid #dedede; }
+        .bg-card-custom { background-color: #ffffff; border: 1px solid #dedede; }
+        .sidebar-item-active { background-color: #262626; color: #ffffff; }
+        .text-muted { color: #666666; }
+        .border-line { border-bottom: 1px solid #dedede; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f3f4f1; }
+        ::-webkit-scrollbar-thumb { background: #dedede; border-radius: 10px; }
     </style>
 </head>
+
 <body class="min-h-screen">
-    <header class="bg-white border-b border-[#dedede] p-4 flex justify-between items-center">
-        <div class="flex items-center gap-4">
-            <a href="dashboard.php" class="p-2 hover:bg-gray-100 rounded-lg transition">
-                <i data-lucide="arrow-left" class="w-5 h-5 text-gray-600"></i>
-            </a>
-            <h1 class="text-lg font-bold text-[#262626]">My Profile</h1>
-        </div>
-        <a href="?edit=1" class="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider rounded-lg border border-[#dedede] text-[#262626] hover:bg-gray-50 transition">
-            <i data-lucide="pencil" class="w-4 h-4"></i>
-            Edit Profile
-        </a>
-    </header>
 
-    <main class="p-4 md:p-10">
-        <?php if ($errorMessage !== ''): ?>
-            <div class="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                <?php echo htmlspecialchars($errorMessage, ENT_QUOTES, 'UTF-8'); ?>
+    <?php $activeNav = 'profile'; include __DIR__ . '/shared/sidebar.php'; ?>
+
+    <div class="<?php echo $dashboardOuterClass; ?>">
+        <div class="<?php echo $dashboardInnerClass; ?>">
+        
+        <header class="flex justify-between items-center pb-6 border-line mb-5">
+            <div class="relative w-96">
+                <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"></i>
+                <input type="text" placeholder="Search lineage or documents..." 
+                    class="w-full bg-white border border-[#dedede] rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm">
             </div>
-        <?php endif; ?>
 
-        <?php if ($successMessage !== ''): ?>
-            <div class="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-                <?php echo htmlspecialchars($successMessage, ENT_QUOTES, 'UTF-8'); ?>
-            </div>
-        <?php endif; ?>
-
-        <section class="max-w-5xl mx-auto bg-white border border-[#dedede] rounded-2xl shadow-sm overflow-hidden">
-            <div class="h-48 md:h-64 cover-gradient"></div>
-
-            <div class="px-6 md:px-10 pb-8">
-                <div class="-mt-14 md:-mt-16 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-                    <div class="flex items-end gap-4">
-                        <div class="w-28 h-28 md:w-32 md:h-32 rounded-full border-4 border-white bg-[#262626] text-white flex items-center justify-center text-3xl font-bold uppercase shadow-md">
-                            <?php echo htmlspecialchars($initials, ENT_QUOTES, 'UTF-8'); ?>
-                        </div>
-                        <div class="pb-2">
-                            <h2 class="text-2xl font-bold text-[#262626]"><?php echo htmlspecialchars($displayName, ENT_QUOTES, 'UTF-8'); ?></h2>
-                            <p class="text-sm text-gray-500"><?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?></p>
-                        </div>
-                    </div>
-
-                    <div class="pb-2">
-                        <span class="inline-flex items-center px-3 py-1 text-xs font-bold uppercase rounded-full <?php echo htmlspecialchars($statusClass, ENT_QUOTES, 'UTF-8'); ?>">
-                            <?php echo htmlspecialchars($status, ENT_QUOTES, 'UTF-8'); ?>
-                        </span>
+            <div class="flex items-center gap-4">
+                <button class="p-2 text-gray-400 hover:text-[#262626] transition relative">
+                    <i data-lucide="bell" class="w-5 h-5"></i>
+                    <span class="absolute top-2 right-2 w-2 h-2 bg-[#262626] rounded-full border-2 border-[#f3f4f1]"></span>
+                </button>
+                <div class="flex items-center gap-3 bg-white border border-[#dedede] p-1.5 pr-4 rounded-xl shadow-sm">
+                    <div class="w-8 h-8 rounded-lg bg-[#262626] text-[#f3f4f1] flex items-center justify-center font-bold text-xs uppercase"><?php echo htmlspecialchars($initials); ?></div>
+                    <div>
+                        <p class="text-xs font-bold leading-none text-[#262626]"><?php echo htmlspecialchars($displayName); ?></p>
+                        <p class="text-[10px] text-gray-400 uppercase tracking-tighter"><?php echo htmlspecialchars($roleLabel); ?></p>
                     </div>
                 </div>
+            </div>
+        </header>
 
-                <div class="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <aside class="lg:col-span-1 bg-[#f8f8f7] border border-[#dedede] rounded-xl p-5">
-                        <h3 class="text-sm font-bold uppercase tracking-wide text-[#262626] mb-4">Family</h3>
+            <!-- Notification Messages -->
+            <?php if ($errorMessage !== ''): ?>
+                <div class="mb-6 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/60 p-4 text-sm text-red-800 backdrop-blur-sm animate-fade-in">
+                    <i data-lucide="alert-circle" class="w-4 h-4 mt-0.5 flex-shrink-0 text-red-600"></i>
+                    <div><span class="font-semibold">Action Required:</span> <?php echo htmlspecialchars($errorMessage, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+            <?php endif; ?>
 
-                        <div class="space-y-4 text-sm mb-5">
-                            <div>
-                                <p class="text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">Parents</p>
-                                <p class="text-gray-700 font-semibold"><?php echo htmlspecialchars($parentsLabel, ENT_QUOTES, 'UTF-8'); ?></p>
+            <?php if ($successMessage !== ''): ?>
+                <div class="mb-6 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm text-emerald-800 backdrop-blur-sm animate-fade-in">
+                    <i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 flex-shrink-0 text-emerald-600"></i>
+                    <div><span class="font-semibold">Success:</span> <?php echo htmlspecialchars($successMessage, ENT_QUOTES, 'UTF-8'); ?></div>
+                </div>
+            <?php endif; ?>
+
+            <!-- Main Canvas Workspace Container -->
+            <main class="bg-white border border-neutral-200 rounded-2xl shadow-[0_2px_8px_-3px_rgba(0,0,0,0.05)] overflow-hidden">
+
+                <div class="h-44 md:h-52 bg-gradient-to-tr from-neutral-900 via-neutral-800 to-neutral-700 relative overflow-hidden">
+                    <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-neutral-600/20 via-transparent to-transparent"></div>
+                    <div class="absolute -bottom-16 -left-16 w-44 h-44 bg-white/5 rounded-full blur-xl"></div>
+                </div>
+
+                <div class="px-6 md:px-8 pb-8">
+                    <!-- Identity Frame Layout (Fixed Overlap & Added z-10) -->
+                    <div class="relative z-10 -mt-10 md:-mt-12 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 border-b border-neutral-100 pb-6">
+                        <div class="flex items-end gap-4">
+                            <div class="w-24 h-24 md:w-28 md:h-28 rounded-2xl border-4 border-white bg-neutral-900 text-neutral-100 flex items-center justify-center text-3xl font-bold uppercase shadow-md tracking-wider flex-shrink-0">
+                                <?php echo htmlspecialchars($initials, ENT_QUOTES, 'UTF-8'); ?>
                             </div>
-                            <div>
-                                <p class="text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">Spouse</p>
-                                <p class="text-gray-700 font-semibold"><?php echo htmlspecialchars($spousesLabel, ENT_QUOTES, 'UTF-8'); ?></p>
-                            </div>
-                            <div>
-                                <p class="text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">Children</p>
-                                <p class="text-gray-700 font-semibold"><?php echo htmlspecialchars($childrenLabel, ENT_QUOTES, 'UTF-8'); ?></p>
+                            <div class="pb-1">
+                                <h2 class="text-xl md:text-2xl font-bold text-neutral-900 tracking-tight leading-7"><?php echo htmlspecialchars($displayName, ENT_QUOTES, 'UTF-8'); ?></h2>
+                                <p class="text-xs font-medium text-neutral-500 mt-0.5"><?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?></p>
                             </div>
                         </div>
 
-                        <div class="space-y-3 text-sm">
-                            <div class="flex items-start gap-2 text-gray-600">
-                                <i data-lucide="mail" class="w-4 h-4 mt-0.5"></i>
-                                <span><?php echo htmlspecialchars($email !== '' ? $email : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
+                        <div class="sm:pb-1">
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-lg <?php echo htmlspecialchars($statusClass, ENT_QUOTES, 'UTF-8'); ?>">
+                                <span class="w-1.5 h-1.5 rounded-full <?php echo strtolower($status) === 'online' ? 'bg-emerald-500' : 'bg-neutral-400'; ?>"></span>
+                                <?php echo htmlspecialchars($status, ENT_QUOTES, 'UTF-8'); ?>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Split Profile Context Workspace -->
+                    <div class="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                        
+                        <!-- Left Wing Block (Sidebar Details) -->
+                        <div class="space-y-4">
+                            <!-- Lineage Panel Card -->
+                            <div class="bg-neutral-50/60 border border-neutral-200/80 rounded-xl p-4 shadow-[inset_0_1px_2px_rgba(0,0,0,0.01)]">
+                                <div class="flex items-center gap-2 pb-3 mb-3 border-b border-neutral-200/60">
+                                    <i data-lucide="git-branch" class="w-3.5 h-3.5 text-neutral-500"></i>
+                                    <h3 class="text-[11px] font-bold uppercase tracking-wider text-neutral-500">Family Lineage</h3>
+                                </div>
+
+                                <div class="space-y-3.5 text-xs">
+                                    <div>
+                                        <p class="text-[10px] font-medium text-neutral-400 uppercase tracking-wide">Parents</p>
+                                        <p class="text-neutral-800 font-semibold mt-0.5"><?php echo htmlspecialchars($parentsLabel, ENT_QUOTES, 'UTF-8'); ?></p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] font-medium text-neutral-400 uppercase tracking-wide">Spouse</p>
+                                        <p class="text-neutral-800 font-semibold mt-0.5"><?php echo htmlspecialchars($spousesLabel, ENT_QUOTES, 'UTF-8'); ?></p>
+                                    </div>
+                                    <div>
+                                        <p class="text-[10px] font-medium text-neutral-400 uppercase tracking-wide">Children</p>
+                                        <p class="text-neutral-800 font-semibold mt-0.5"><?php echo htmlspecialchars($childrenLabel, ENT_QUOTES, 'UTF-8'); ?></p>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="flex items-start gap-2 text-gray-600">
-                                <i data-lucide="map-pin" class="w-4 h-4 mt-0.5"></i>
-                                <span><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
-                            </div>
-                            <div class="flex items-start gap-2 text-gray-600">
-                                <i data-lucide="clock-3" class="w-4 h-4 mt-0.5"></i>
-                                <span><?php echo htmlspecialchars($lastActive, ENT_QUOTES, 'UTF-8'); ?></span>
+
+                            <!-- System Metadata Card -->
+                            <div class="bg-white border border-neutral-200 rounded-xl p-4 shadow-sm space-y-3 text-xs">
+                                <div class="flex items-center gap-2.5 text-neutral-600 hover:text-neutral-900 transition">
+                                    <i data-lucide="mail" class="w-4 h-4 text-neutral-400 flex-shrink-0"></i>
+                                    <span class="truncate font-medium"><?php echo htmlspecialchars($email !== '' ? $email : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
+                                </div>
+                                <div class="flex items-center gap-2.5 text-neutral-600 hover:text-neutral-900 transition">
+                                    <i data-lucide="map-pin" class="w-4 h-4 text-neutral-400 flex-shrink-0"></i>
+                                    <span class="font-medium"><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
+                                </div>
+                                <div class="flex items-center gap-2.5 text-neutral-600 border-t border-neutral-100 pt-2.5 mt-1 text-[11px]">
+                                    <i data-lucide="clock" class="w-3.5 h-3.5 text-neutral-400 flex-shrink-0"></i>
+                                    <span class="text-neutral-400">Last Active: <span class="font-medium text-neutral-700"><?php echo htmlspecialchars($lastActive, ENT_QUOTES, 'UTF-8'); ?></span></span>
+                                </div>
                             </div>
                         </div>
-                    </aside>
 
-                    <section class="lg:col-span-2 bg-white border border-[#dedede] rounded-xl p-5">
-                        <div class="flex items-center justify-between mb-5">
-                            <h3 class="text-sm font-bold uppercase tracking-wide text-[#262626]">Profile Details</h3>
-                            <?php if (!$isEditMode): ?>
-                                <a href="?edit=1" class="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider rounded-lg border border-[#dedede] text-[#262626] hover:bg-gray-50 transition">
-                                    <i data-lucide="pencil" class="w-4 h-4"></i>
-                                    Edit
-                                </a>
+                        <!-- Right Wing Block (Form Context/View Setup) -->
+                        <div class="lg:col-span-2">
+                            
+                            <?php if ($isEditMode): ?>
+                                <!-- Form Mutation Layout Container -->
+                                <form method="post" class="space-y-5 bg-neutral-50/40 border border-neutral-200 rounded-xl p-5 shadow-sm">
+                                    <input type="hidden" name="profile_action" value="save_profile">
+
+                                    <div class="flex items-center gap-2 pb-2 border-b border-neutral-200/80 mb-1">
+                                        <i data-lucide="user-cog" class="w-4 h-4 text-neutral-800"></i>
+                                        <h3 class="text-xs font-bold uppercase tracking-wider text-neutral-800">Modify Personal Details</h3>
+                                    </div>
+
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div>
+                                            <label for="first_name" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">First Name</label>
+                                            <input id="first_name" name="first_name" type="text" value="<?php echo htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium" required>
+                                        </div>
+                                        <div>
+                                            <label for="middle_name" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Middle Name</label>
+                                            <input id="middle_name" name="middle_name" type="text" value="<?php echo htmlspecialchars($middleName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium">
+                                        </div>
+                                        <div>
+                                            <label for="last_name" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Last Name</label>
+                                            <input id="last_name" name="last_name" type="text" value="<?php echo htmlspecialchars($lastName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium" required>
+                                        </div>
+                                    </div>
+
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label for="email" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Email Address</label>
+                                            <input id="email" name="email" type="email" value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium">
+                                        </div>
+                                        <div>
+                                            <label for="jurisdiction" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Jurisdiction Area</label>
+                                            <input id="jurisdiction" name="jurisdiction" type="text" value="<?php echo htmlspecialchars($jurisdiction, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium">
+                                        </div>
+                                    </div>
+
+                                    <div class="pt-4 border-t border-neutral-200">
+                                        <div class="flex items-center gap-2 mb-3">
+                                            <i data-lucide="shield-check" class="w-4 h-4 text-neutral-400"></i>
+                                            <h4 class="text-[11px] font-bold uppercase tracking-wider text-neutral-500">Security Credentials</h4>
+                                        </div>
+                                        
+                                        <div class="space-y-3.5">
+                                            <div>
+                                                <label for="current_password" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Current Password</label>
+                                                <input id="current_password" name="current_password" type="password" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm" autocomplete="current-password" placeholder="••••••••">
+                                            </div>
+                                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label for="new_password" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">New Password</label>
+                                                    <input id="new_password" name="new_password" type="password" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm" autocomplete="new-password" placeholder="At least 8 characters">
+                                                </div>
+                                                <div>
+                                                    <label for="confirm_password" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Confirm New Password</label>
+                                                    <input id="confirm_password" name="confirm_password" type="password" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm" autocomplete="new-password" placeholder="Re-enter new password">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Action Elements Panel -->
+                                    <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-neutral-200">
+                                        <a href="profile.php" class="px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl border border-neutral-200 text-neutral-700 bg-white hover:bg-neutral-50 shadow-sm transition">Cancel</a>
+                                        <button type="submit" class="px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl bg-neutral-900 text-white hover:bg-neutral-800 shadow-sm transition">Save Modifications</button>
+                                    </div>
+                                </form>
+                            <?php else: ?>
+                                <!-- High Fidelity View Mode Grid Panel -->
+                                <div class="bg-white border border-neutral-200 rounded-xl p-5 shadow-sm">
+                                    <div class="flex items-center justify-between pb-3 mb-5 border-b border-neutral-100">
+                                        <div class="flex items-center gap-2">
+                                            <i data-lucide="layout-grid" class="w-4 h-4 text-neutral-800"></i>
+                                            <h3 class="text-xs font-bold uppercase tracking-wider text-neutral-800">Account Registry Details</h3>
+                                        </div>
+                                        <a href="?edit=1" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-xl border border-neutral-200 text-neutral-700 hover:bg-neutral-50 shadow-sm transition">
+                                            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                                            Edit Profile
+                                        </a>
+                                    </div>
+
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-5 gap-x-4 text-xs">
+                                        <div class="bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3">
+                                            <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-1">Full Legal Name</p>
+                                            <p class="font-semibold text-neutral-800 text-sm"><?php echo htmlspecialchars($displayName, ENT_QUOTES, 'UTF-8'); ?></p>
+                                        </div>
+                                        <div class="bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3">
+                                            <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-1">System Privilege Level</p>
+                                            <p class="font-semibold text-neutral-800 text-sm"><?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?></p>
+                                        </div>
+                                        <div class="bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3">
+                                            <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-1">Email Address</p>
+                                            <p class="font-semibold text-neutral-800 text-sm truncate"><?php echo htmlspecialchars($email !== '' ? $email : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
+                                        </div>
+                                        <div class="bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3">
+                                            <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-1">Assigned Jurisdiction</p>
+                                            <p class="font-semibold text-neutral-800 text-sm"><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
+                                        </div>
+                                        <div class="sm:col-span-2 bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3 flex items-center justify-between">
+                                            <div>
+                                                <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-0.5">Last System Activity Timestamp</p>
+                                                <p class="font-semibold text-neutral-700"><?php echo htmlspecialchars($lastActive, ENT_QUOTES, 'UTF-8'); ?></p>
+                                            </div>
+                                            <i data-lucide="calendar" class="w-4 h-4 text-neutral-300 mr-1.5"></i>
+                                        </div>
+                                    </div>
+                                </div>
                             <?php endif; ?>
+
                         </div>
+                    </div>
 
-                        <?php if ($isEditMode): ?>
-                            <form method="post" class="space-y-4">
-                                <input type="hidden" name="profile_action" value="save_profile">
-
-                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <div>
-                                        <label for="first_name" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">First Name</label>
-                                        <input id="first_name" name="first_name" type="text" value="<?php echo htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm" required>
-                                    </div>
-                                    <div>
-                                        <label for="middle_name" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">Middle Name</label>
-                                        <input id="middle_name" name="middle_name" type="text" value="<?php echo htmlspecialchars($middleName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm">
-                                    </div>
-                                    <div>
-                                        <label for="last_name" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">Last Name</label>
-                                        <input id="last_name" name="last_name" type="text" value="<?php echo htmlspecialchars($lastName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm" required>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label for="email" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">Email</label>
-                                    <input id="email" name="email" type="email" value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm">
-                                </div>
-
-                                <div>
-                                    <label for="jurisdiction" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">Jurisdiction</label>
-                                    <input id="jurisdiction" name="jurisdiction" type="text" value="<?php echo htmlspecialchars($jurisdiction, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm">
-                                </div>
-
-                                <div class="pt-2 border-t border-[#dedede]">
-                                    <h4 class="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-3">Change Password</h4>
-                                    <div class="space-y-3">
-                                        <div>
-                                            <label for="current_password" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">Current Password</label>
-                                            <input id="current_password" name="current_password" type="password" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm" autocomplete="current-password">
-                                        </div>
-                                        <div>
-                                            <label for="new_password" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">New Password</label>
-                                            <input id="new_password" name="new_password" type="password" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm" autocomplete="new-password">
-                                        </div>
-                                        <div>
-                                            <label for="confirm_password" class="block text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-1">Confirm New Password</label>
-                                            <input id="confirm_password" name="confirm_password" type="password" class="w-full bg-white border border-[#dedede] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm" autocomplete="new-password">
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="flex items-center gap-3 pt-2">
-                                    <button type="submit" class="px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-lg bg-[#262626] text-white hover:bg-[#404040] transition">Save Changes</button>
-                                    <a href="profile.php" class="px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-lg border border-[#dedede] text-[#262626] hover:bg-gray-50 transition">Cancel</a>
-                                </div>
-                            </form>
-                        <?php else: ?>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-5 text-sm">
-                                <div>
-                                    <p class="text-gray-400 uppercase text-[10px] font-bold tracking-wide mb-1">Name</p>
-                                    <p class="font-semibold text-[#262626]"><?php echo htmlspecialchars($displayName, ENT_QUOTES, 'UTF-8'); ?></p>
-                                </div>
-                                <div>
-                                    <p class="text-gray-400 uppercase text-[10px] font-bold tracking-wide mb-1">Role</p>
-                                    <p class="font-semibold text-[#262626]"><?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?></p>
-                                </div>
-                                <div>
-                                    <p class="text-gray-400 uppercase text-[10px] font-bold tracking-wide mb-1">Email</p>
-                                    <p class="font-semibold text-[#262626]"><?php echo htmlspecialchars($email !== '' ? $email : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
-                                </div>
-                                <div>
-                                    <p class="text-gray-400 uppercase text-[10px] font-bold tracking-wide mb-1">Jurisdiction</p>
-                                    <p class="font-semibold text-[#262626]"><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
-                                </div>
-                                <div class="md:col-span-2">
-                                    <p class="text-gray-400 uppercase text-[10px] font-bold tracking-wide mb-1">Last Active</p>
-                                    <p class="font-semibold text-[#262626]"><?php echo htmlspecialchars($lastActive, ENT_QUOTES, 'UTF-8'); ?></p>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-                    </section>
                 </div>
-            </div>
-        </section>
-    </main>
+            </main>
+
+        </div>
+    </div>
 
     <script>
         lucide.createIcons();

@@ -79,7 +79,7 @@ $approvalHistorySql = "SELECT applicant_name, COALESCE(approve_reject_date, veri
 FROM pending_approvals
 WHERE approval_status IN ('approved', 'rejected')
 ORDER BY verification_date DESC
-LIMIT 10";
+LIMIT 4";
 $approvalHistoryResult = mysqli_query($conn, $approvalHistorySql);
 if ($approvalHistoryResult && mysqli_num_rows($approvalHistoryResult) > 0) {
     while ($row = mysqli_fetch_assoc($approvalHistoryResult)) {
