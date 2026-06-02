@@ -87,7 +87,7 @@ $totalPendingProfiles = $pendingBarangay + $pendingElder;
 
 // 3. Rejected Users Dynamic Analytical Fetch
 $totalRejectedUsers = 0;
-$rejectedQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'rejected'";
+$rejectedQuery = "SELECT COUNT(*) as total FROM pending_approvals WHERE approval_status = 'rejected'";
 $rejectedResult = mysqli_query($conn, $rejectedQuery);
 if ($rejectedResult) {
     $totalRejectedUsers = (int)(mysqli_fetch_assoc($rejectedResult)['total'] ?? 0);
@@ -127,9 +127,42 @@ if ($ageResult && $row = mysqli_fetch_assoc($ageResult)) {
 
 // 6. Clan Lineage Distribution
 $clanList = [];
+$clanJoinConditions = ["i.last_name LIKE CONCAT('%', REPLACE(f.family_name, ' Family', ''), '%')"];
+if ($selectedBarangay !== '') {
+    $clanJoinConditions[] = "i.barangay = '" . mysqli_real_escape_string($conn, $selectedBarangay) . "'";
+}
+if ($selectedTribe !== '') {
+    $clanJoinConditions[] = "i.tribe_clan = " . (int)$selectedTribe;
+}
+if ($selectedSex !== '') {
+    $clanJoinConditions[] = "i.sex = '" . mysqli_real_escape_string($conn, $selectedSex) . "'";
+}
+if ($startDate !== '' && $endDate !== '') {
+    $clanJoinConditions[] = "i.registration_date BETWEEN '" . mysqli_real_escape_string($conn, $startDate) . "' AND '" . mysqli_real_escape_string($conn, $endDate) . "'";
+}
+if ($selectedAge !== '') {
+    switch ($selectedAge) {
+        case '0-5':
+            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 0 AND 5";
+            break;
+        case '6-12':
+            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 6 AND 12";
+            break;
+        case '13-19':
+            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 13 AND 19";
+            break;
+        case '20-59':
+            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 20 AND 59";
+            break;
+        case '60+':
+            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) >= 60";
+            break;
+    }
+}
+
 $clanQuery = "SELECT f.family_name, COUNT(i.ip_member_id) as count 
               FROM families f 
-              LEFT JOIN ipmembers i ON i.last_name LIKE CONCAT('%', REPLACE(f.family_name, ' Family', ''), '%')
+              LEFT JOIN ipmembers i ON " . implode(" AND ", $clanJoinConditions) . "
               GROUP BY f.family_id LIMIT 6";
 $clanResult = mysqli_query($conn, $clanQuery);
 if ($clanResult && mysqli_num_rows($clanResult) > 0) {
