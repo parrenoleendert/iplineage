@@ -10,6 +10,16 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
     die('Database connection not established. Check src/dbconfig.php and MySQL service.');
 }
 
+function first_existing_column(array $columns, array $candidates): ?string {
+    foreach ($candidates as $candidate) {
+        if (in_array($candidate, $columns, true)) {
+            return $candidate;
+        }
+    }
+
+    return null;
+}
+
 $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
 $isAdmin = $currentRole === 'admin';
 $statsGridClass = $isAdmin ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10' : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-10';
@@ -72,21 +82,32 @@ if ($tribe_result && mysqli_num_rows($tribe_result) > 0) {
     }
 }
 
-// --- PAGINATION FOR ACTIVITY HISTORY ---
+$pendingApprovalColumns = [];
+$pendingApprovalColumnsResult = mysqli_query($conn, "SHOW COLUMNS FROM pending_approvals");
+if ($pendingApprovalColumnsResult) {
+    while ($columnRow = mysqli_fetch_assoc($pendingApprovalColumnsResult)) {
+        $pendingApprovalColumns[] = strtolower((string) ($columnRow['Field'] ?? ''));
+    }
+}
+
+$approvalIdColumn = first_existing_column($pendingApprovalColumns, ['id', 'pending_approval_id', 'approval_id']);
+$remarksColumn = first_existing_column($pendingApprovalColumns, ['rejected_remarks', 'rejection_remarks', 'remarks', 'rejection_reason', 'reason', 'comment', 'comments']);
+
+// --- PAGINATION FOR REJECTED HISTORY ---
 $limit = 4; // Number of rows per page
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset = ($page - 1) * $limit;
 
 // Get total count for calculating total pages
-$totalRowsSql = "SELECT COUNT(*) AS total FROM pending_approvals WHERE approval_status IN ('approved', 'rejected')";
+$totalRowsSql = "SELECT COUNT(*) AS total FROM pending_approvals WHERE approval_status = 'rejected'";
 $totalRowsResult = mysqli_query($conn, $totalRowsSql);
 $totalRows = mysqli_fetch_assoc($totalRowsResult)['total'] ?? 0;
 $totalPages = ceil($totalRows / $limit);
 
 $approvalHistory = [];
-$approvalHistorySql = "SELECT applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date, approval_status
+$approvalHistorySql = "SELECT " . ($approvalIdColumn !== null ? "{$approvalIdColumn} AS approval_id, " : "0 AS approval_id, ") . "applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date, approval_status" . ($remarksColumn !== null ? ", {$remarksColumn} AS remarks_text" : ", '' AS remarks_text") . "
 FROM pending_approvals
-WHERE approval_status IN ('approved', 'rejected')
+WHERE approval_status = 'rejected'
 ORDER BY activity_date DESC
 LIMIT $limit OFFSET $offset";
 
@@ -96,6 +117,8 @@ if ($approvalHistoryResult && mysqli_num_rows($approvalHistoryResult) > 0) {
         $approvalHistory[] = $row;
     }
 }
+
+
 
 $chartLabels = [];
 $chartValues = [];
@@ -260,7 +283,7 @@ if ($applicationsDateColumn !== null) {
                     <?php
                         // Filter directly from database or reuse global values safely
                         $recentApprovedSql = "SELECT applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date 
-                                              FROM pending_approvals WHERE approval_status = 'approved' ORDER BY activity_date DESC LIMIT 2";
+                                              FROM pending_approvals WHERE approval_status = 'approved' ORDER BY activity_date DESC LIMIT 4";
                         $recentApprovedResult = mysqli_query($conn, $recentApprovedSql);
                         $hasRecentApproved = $recentApprovedResult && mysqli_num_rows($recentApprovedResult) > 0;
                     ?>
@@ -302,10 +325,37 @@ if ($applicationsDateColumn !== null) {
         <div class="mt-8 bg-card-custom rounded-2xl overflow-hidden shadow-sm">
             <div class="p-6 border-line flex justify-between items-center bg-gray-50/50">
                 <div>
-                    <h3 class="font-bold uppercase tracking-widest text-[10px] text-gray-500">Activity History</h3>
+                    <h3 class="font-bold uppercase tracking-widest text-[10px] text-gray-500">Rejected History</h3>
                 </div>
             </div>
+            <div class="relative">
 
+            <aside id="floatingMemberCard" class="hidden fixed inset-0 z-[60] items-center justify-center p-4 sm:p-6">
+                <div id="floatingMemberBackdrop" class="absolute inset-0 bg-black/40"></div>
+                <div class="relative z-10 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-[0_0_20px_rgba(0,0,0,0.3)]">
+                <div class="mb-4 flex items-center justify-between">
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-[#262626]">Rejection Remarks</h3>
+                    <button id="closeFloatingMemberCard" class="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-[#262626] transition">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+
+                <div class="mb-6 flex items-center gap-4 p-4">
+                    <div id="floatingInitials" class="h-24 w-24 flex-shrink-0 rounded-full bg-[#262626] text-white flex items-center justify-center">
+                        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    </div>
+                    <div>
+                        <p id="floatingFullName" class="text-lg font-bold text-[#262626]">No member selected</p>
+                        <p class="text-sm text-gray-500">examplemail@example.com</p>
+                    </div>
+                </div>
+                <div class="text-md font-bold text-[#262626] mb-2">
+                    Remarks:
+                </div>
+                <div id="floatingRemarks" class="text-sm text-gray-700">
+                    No remarks available for this record.
+                </div>
+            </aside>
             <table class="w-full text-left">
                 <thead>
                     <tr class="text-[10px] uppercase text-gray-400 border-line bg-gray-50/30">
@@ -333,7 +383,7 @@ if ($applicationsDateColumn !== null) {
                                     ? 'bg-green-100 text-green-700 border border-green-200'
                                     : 'bg-red-100 text-red-700 border border-red-200';
                             ?>
-                            <tr class="hover:bg-gray-50/50 transition">
+                            <tr class="member-row cursor-pointer hover:bg-gray-100 transition-colors duration-200" data-approval-id="<?php echo htmlspecialchars((string) ($historyRow['approval_id'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>" data-full-name="<?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?>">
                                 <td class="px-6 py-4">
                                     <div class="font-semibold text-[#262626]"><?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?></div>
                                 </td>
@@ -343,18 +393,38 @@ if ($applicationsDateColumn !== null) {
                                 <td class="px-6 py-4">
                                     <span class="px-3 py-1 text-[10px] font-bold uppercase rounded-md <?php echo htmlspecialchars($statusClass, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
                                 </td>
-                                <td class="px-6 py-4 text-right">
-                                    <button class="p-2 hover:bg-gray-100 rounded-lg transition text-gray-400"><i data-lucide="more-horizontal" class="w-4 h-4"></i></button>
+                                <td class="px-6 py-4 text-right relative">
+                                    <div class="inline-flex items-center gap-2">
+                                        <button type="button" class="p-2 hover:bg-gray-100 rounded-xl transition text-gray-400 hover:text-[#262626]" aria-label="More actions"><i data-lucide="more-horizontal" class="w-6 h-6"></i></button>
+                                    </div>
+
+                                    <div class="action-menu hidden absolute right-15 top-0 mt-2 w-40 bg-white border border-[#dedede] rounded-lg shadow-sm p-2 z-50">
+                                        <button type="button" class="font-bold w-full text-left px-2 py-2 rounded hover:bg-gray-50 menu-undo text-red-600 ">Undo</button>
+                                    </div>
                                 </td>
+                                
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="4" class="px-6 py-8 text-center text-gray-400">No approved or rejected records found.</td>
+                            <td colspan="4" class="px-6 py-8 text-center text-gray-400">No rejected records found.</td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
             </table>
+
+            <!-- Undo confirmation modal -->
+            <div id="confirmUndoModal" class="hidden fixed inset-0 z-[70] items-center justify-center p-4">
+                <div class="absolute inset-0 bg-black/40"></div>
+                <div class="relative z-10 w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
+                    <h4 class="text-lg font-bold mb-2">Confirm Undo</h4>
+                    <p class="text-sm text-gray-600 mb-4">This will move the record back to pending and clear any rejection remarks. Continue?</p>
+                    <div class="flex justify-end gap-2">
+                        <button id="cancelUndoBtn" class="px-4 py-2 rounded-lg border border-[#dedede] bg-white">Cancel</button>
+                        <button id="confirmUndoBtn" class="px-4 py-2 rounded-lg bg-red-600 text-white">Confirm Undo</button>
+                    </div>
+                </div>
+            </div>
 
             <?php if ($totalPages > 1): ?>
             <div class="p-4 bg-gray-50/50 border-t border-[#dedede] flex justify-between items-center text-xs text-gray-500 font-semibold">
@@ -381,6 +451,214 @@ if ($applicationsDateColumn !== null) {
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script>
         lucide.createIcons();
+
+        const floatingMemberCard = document.getElementById('floatingMemberCard');
+        const floatingBackdrop = document.getElementById('floatingMemberBackdrop');
+        const closeFloatingMemberCard = document.getElementById('closeFloatingMemberCard');
+        const floatingFullName = document.getElementById('floatingFullName');
+        const floatingRemarks = document.getElementById('floatingRemarks');
+
+        const hideFloatingMemberCard = () => {
+            if (floatingMemberCard) {
+                floatingMemberCard.classList.add('hidden');
+            }
+        };
+
+        const showFloatingMemberCard = (fullName, remarks) => {
+            if (floatingFullName) {
+                floatingFullName.textContent = fullName || 'No member selected';
+            }
+            if (floatingRemarks) {
+                floatingRemarks.textContent = remarks || 'No remarks available for this record.';
+            }
+            if (floatingMemberCard) {
+                floatingMemberCard.classList.remove('hidden');
+                floatingMemberCard.classList.add('flex');
+            }
+        };
+
+        document.querySelectorAll('.member-row').forEach((row) => {
+            row.addEventListener('click', () => {
+                const approvalId = row.dataset.approvalId || '';
+                const applicantName = row.dataset.fullName || '';
+
+                if (!approvalId || approvalId === '0') {
+                    showFloatingMemberCard(applicantName, 'No remarks available for this record.');
+                    return;
+                }
+
+                showFloatingMemberCard(applicantName, 'Loading remarks...');
+
+                fetch('backend/rejection_remarks.php?approval_id=' + encodeURIComponent(approvalId), {
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                    .then((response) => response.json())
+                    .then((payload) => {
+                        if (payload && payload.success) {
+                            showFloatingMemberCard(payload.full_name || applicantName, payload.remarks || 'No remarks available for this record.');
+                            return;
+                        }
+
+                        showFloatingMemberCard(applicantName, 'No remarks available for this record.');
+                    })
+                    .catch(() => {
+                        showFloatingMemberCard(applicantName, 'No remarks available for this record.');
+                    });
+            });
+        });
+
+        // Undo button handling
+        let undoTargetApprovalId = null;
+        const confirmUndoModal = document.getElementById('confirmUndoModal');
+        const cancelUndoBtn = document.getElementById('cancelUndoBtn');
+        const confirmUndoBtn = document.getElementById('confirmUndoBtn');
+
+        document.querySelectorAll('.undo-btn').forEach((btn) => {
+            btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                undoTargetApprovalId = btn.dataset.approvalId || null;
+                if (confirmUndoModal) {
+                    confirmUndoModal.classList.remove('hidden');
+                    confirmUndoModal.classList.add('flex');
+                } else {
+                    if (!undoTargetApprovalId) return;
+                    doUndo(undoTargetApprovalId);
+                }
+            });
+        });
+
+        if (cancelUndoBtn) {
+            cancelUndoBtn.addEventListener('click', () => {
+                undoTargetApprovalId = null;
+                if (confirmUndoModal) {
+                    confirmUndoModal.classList.add('hidden');
+                    confirmUndoModal.classList.remove('flex');
+                }
+            });
+        }
+
+        if (confirmUndoBtn) {
+            confirmUndoBtn.addEventListener('click', () => {
+                if (!undoTargetApprovalId) return;
+                doUndo(undoTargetApprovalId);
+            });
+        }
+
+        function doUndo(approvalId) {
+            fetch('backend/undo_rejection.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: 'approval_id=' + encodeURIComponent(approvalId)
+            })
+                .then((r) => r.json())
+                .then((payload) => {
+                    if (payload && payload.success) {
+                        // remove row from table
+                        const row = document.querySelector('tr.member-row[data-approval-id="' + approvalId + '"]');
+                        if (row && row.parentNode) row.parentNode.removeChild(row);
+                        // hide modal
+                        if (confirmUndoModal) {
+                            confirmUndoModal.classList.add('hidden');
+                            confirmUndoModal.classList.remove('flex');
+                        }
+                        undoTargetApprovalId = null;
+                        return;
+                    }
+                    alert('Unable to undo rejection.');
+                })
+                .catch(() => {
+                    alert('Unable to undo rejection.');
+                });
+        }
+
+        // Action menu handling for three-dot button
+        function closeAllActionMenus() {
+            document.querySelectorAll('.action-menu').forEach(m => {
+                m.classList.add('hidden');
+            });
+        }
+
+        document.querySelectorAll('.view-remarks-btn').forEach((btn) => {
+            btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                closeAllActionMenus();
+                const cell = btn.closest('td');
+                if (!cell) return;
+                const menu = cell.querySelector('.action-menu');
+                if (!menu) return;
+                menu.classList.toggle('hidden');
+                // store approval id on menu for later reference
+                const row = btn.closest('tr.member-row');
+                const approvalId = row ? (row.dataset.approvalId || '') : '';
+                menu.dataset.approvalId = approvalId;
+            });
+        });
+
+        // menu actions
+        document.querySelectorAll('.menu-view-remarks').forEach((mBtn) => {
+            mBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const menu = mBtn.closest('.action-menu');
+                if (!menu) return;
+                const approvalId = menu.dataset.approvalId || '';
+                const row = mBtn.closest('tr.member-row');
+                const applicantName = row ? (row.dataset.fullName || '') : '';
+                closeAllActionMenus();
+                if (!approvalId || approvalId === '0') {
+                    showFloatingMemberCard(applicantName, 'No remarks available for this record.');
+                    return;
+                }
+                showFloatingMemberCard(applicantName, 'Loading remarks...');
+                fetch('backend/rejection_remarks.php?approval_id=' + encodeURIComponent(approvalId), { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                    .then(r => r.json())
+                    .then(payload => {
+                        if (payload && payload.success) {
+                            showFloatingMemberCard(payload.full_name || applicantName, payload.remarks || 'No remarks available for this record.');
+                            return;
+                        }
+                        showFloatingMemberCard(applicantName, 'No remarks available for this record.');
+                    })
+                    .catch(() => {
+                        showFloatingMemberCard(applicantName, 'No remarks available for this record.');
+                    });
+            });
+        });
+
+        document.querySelectorAll('.menu-undo').forEach((mBtn) => {
+            mBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const menu = mBtn.closest('.action-menu');
+                if (!menu) return;
+                const approvalId = menu.dataset.approvalId || null;
+                closeAllActionMenus();
+                if (!approvalId) return;
+                undoTargetApprovalId = approvalId;
+                if (confirmUndoModal) {
+                    confirmUndoModal.classList.remove('hidden');
+                    confirmUndoModal.classList.add('flex');
+                } else {
+                    doUndo(approvalId);
+                }
+            });
+        });
+
+        // close menus when clicking outside
+        document.addEventListener('click', (ev) => {
+            closeAllActionMenus();
+        });
+
+        if (closeFloatingMemberCard) {
+            closeFloatingMemberCard.addEventListener('click', hideFloatingMemberCard);
+        }
+
+        if (floatingBackdrop) {
+            floatingBackdrop.addEventListener('click', hideFloatingMemberCard);
+        }
 
         const ctx = document.getElementById('ipChart').getContext('2d');
         new Chart(ctx, {
