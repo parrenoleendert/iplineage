@@ -238,6 +238,7 @@ function get_last_active_label($lastActive, $status) {
 <body class="min-h-screen">
 
     <?php $activeNav = 'ip_members'; include __DIR__ . '/shared/sidebar.php'; ?>
+    <?php $activeNav = 'lineage_management'; include __DIR__ . '/shared/sidebar.php'; ?>
 
     <div class="ml-64 p-8">
         <header class="flex justify-between items-center pb-6 border-line mb-5">
