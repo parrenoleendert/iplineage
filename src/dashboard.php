@@ -72,14 +72,24 @@ if ($tribe_result && mysqli_num_rows($tribe_result) > 0) {
     }
 }
 
+// --- PAGINATION FOR ACTIVITY HISTORY ---
+$limit = 4; // Number of rows per page
+$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+$offset = ($page - 1) * $limit;
 
-// Activity history (approved/rejected only)
+// Get total count for calculating total pages
+$totalRowsSql = "SELECT COUNT(*) AS total FROM pending_approvals WHERE approval_status IN ('approved', 'rejected')";
+$totalRowsResult = mysqli_query($conn, $totalRowsSql);
+$totalRows = mysqli_fetch_assoc($totalRowsResult)['total'] ?? 0;
+$totalPages = ceil($totalRows / $limit);
+
 $approvalHistory = [];
 $approvalHistorySql = "SELECT applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date, approval_status
 FROM pending_approvals
 WHERE approval_status IN ('approved', 'rejected')
-ORDER BY verification_date DESC
-LIMIT 4";
+ORDER BY activity_date DESC
+LIMIT $limit OFFSET $offset";
+
 $approvalHistoryResult = mysqli_query($conn, $approvalHistorySql);
 if ($approvalHistoryResult && mysqli_num_rows($approvalHistoryResult) > 0) {
     while ($row = mysqli_fetch_assoc($approvalHistoryResult)) {
@@ -134,7 +144,6 @@ if ($applicationsDateColumn !== null) {
         }
     }
 }
-
 ?>
 
 <!DOCTYPE html>
@@ -196,7 +205,7 @@ if ($applicationsDateColumn !== null) {
         </section>
 
         <div class="<?php echo $statsGridClass; ?>">
-            <a href="<?php echo $isAdmin ? 'total_members.php' : 'total_members.php'; ?>" class="bg-card-custom p-6 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
+            <a href="total_members.php" class="bg-card-custom p-6 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
                 <div class="flex justify-between items-start mb-4">
                     <div class="p-2 bg-[#262626]/5 rounded-lg text-[#262626]"><i data-lucide="users" class="w-5 h-5"></i></div>
                     <span class="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-md">+12.5%</span>
@@ -213,7 +222,7 @@ if ($applicationsDateColumn !== null) {
                 <h3 class="text-2xl font-bold text-[#262626]"><?php echo count($tribes); ?></h3>
             </a>
 
-            <a href="<?php echo $isAdmin ? 'pending_verification.php' : 'pending_verification.php'; ?>" class="bg-card-custom p-6 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
+            <a href="pending_verification.php" class="bg-card-custom p-6 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
                 <div class="flex justify-between items-start mb-4">
                     <div class="p-2 bg-[#262626]/5 rounded-lg text-[#262626]"><i data-lucide="shield-check" class="w-5 h-5"></i></div>
                 </div>
@@ -249,14 +258,15 @@ if ($applicationsDateColumn !== null) {
                 <h3 class="font-bold text-[#262626] mb-6">Recently Approved</h3>
                 <div class="space-y-5">
                     <?php
-                        $recentApproved = array_values(array_filter($approvalHistory, static function ($historyRow) {
-                            return strtolower(trim((string) ($historyRow['approval_status'] ?? ''))) === 'approved';
-                        }));
-                        $recentApproved = array_slice($recentApproved, 0, 2);
+                        // Filter directly from database or reuse global values safely
+                        $recentApprovedSql = "SELECT applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date 
+                                              FROM pending_approvals WHERE approval_status = 'approved' ORDER BY activity_date DESC LIMIT 2";
+                        $recentApprovedResult = mysqli_query($conn, $recentApprovedSql);
+                        $hasRecentApproved = $recentApprovedResult && mysqli_num_rows($recentApprovedResult) > 0;
                     ?>
 
-                    <?php if (!empty($recentApproved)): ?>
-                        <?php foreach ($recentApproved as $approvedRow): ?>
+                    <?php if ($hasRecentApproved): ?>
+                        <?php while ($approvedRow = mysqli_fetch_assoc($recentApprovedResult)): ?>
                             <?php
                                 $approvedName = (string) ($approvedRow['applicant_name'] ?? 'N/A');
                                 $approvedDateLabel = 'N/A';
@@ -278,7 +288,7 @@ if ($applicationsDateColumn !== null) {
                                 </div>
                                 <span class="text-[10px] font-bold uppercase px-2 py-1 rounded-md bg-green-100 text-green-700 border border-green-200">Approved</span>
                             </div>
-                        <?php endforeach; ?>
+                        <?php endwhile; ?>
                     <?php else: ?>
                         <p class="text-sm text-gray-400">No recently approved records found.</p>
                     <?php endif; ?>
@@ -290,62 +300,80 @@ if ($applicationsDateColumn !== null) {
         </div>
 
         <div class="mt-8 bg-card-custom rounded-2xl overflow-hidden shadow-sm">
-    <div class="p-6 border-line flex justify-between items-center bg-gray-50/50">
-        <div>
-            <h3 class="font-bold uppercase tracking-widest text-[10px] text-gray-500">Rejected History</h3>
-        </div>
-    </div>
+            <div class="p-6 border-line flex justify-between items-center bg-gray-50/50">
+                <div>
+                    <h3 class="font-bold uppercase tracking-widest text-[10px] text-gray-500">Activity History</h3>
+                </div>
+            </div>
 
-    <table class="w-full text-left">
-        <thead>
-            <tr class="text-[10px] uppercase text-gray-400 border-line bg-gray-50/30">
-                <th class="px-6 py-4">Full Name</th>
-                <th class="px-10 py-4">Date</th>
-                <th class="px-10 py-4">Status</th>
-                <th class="px-6 py-4 text-right">Action</th>
-            </tr>
-        </thead>
-        <tbody class="text-sm divide-y divide-[#dedede]">
-            <?php if (!empty($approvalHistory)): ?>
-                <?php foreach ($approvalHistory as $historyRow): ?>
-                    <?php
-                        $applicantName = (string) ($historyRow['applicant_name'] ?? 'N/A');
-                        $status = strtolower(trim((string) ($historyRow['approval_status'] ?? '')));
-                        $verificationDateLabel = 'N/A';
-
-                        $timestamp = strtotime((string) ($historyRow['activity_date'] ?? ''));
-                        if ($timestamp !== false) {
-                            $verificationDateLabel = date('M d, Y', $timestamp);
-                        }
-
-                        $statusLabel = $status === 'approved' ? 'Approved' : 'Rejected';
-                        $statusClass = $status === 'approved'
-                            ? 'bg-green-100 text-green-700 border border-green-200'
-                            : 'bg-red-100 text-red-700 border border-red-200';
-                    ?>
-                    <tr class="hover:bg-gray-50/50 transition">
-                        <td class="px-6 py-4">
-                            <div class="font-semibold text-[#262626]"><?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?></div>
-                        </td>
-                        <td class="px-6 py-4">
-                            <div class="font-semibold text-[#262626]"><?php echo htmlspecialchars($verificationDateLabel, ENT_QUOTES, 'UTF-8'); ?></div>
-                        </td>
-                        <td class="px-6 py-4">
-                            <span class="px-3 py-1 text-[10px] font-bold uppercase rounded-md <?php echo htmlspecialchars($statusClass, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
-                        </td>
-                        <td class="px-6 py-4 text-right">
-                            <button class="p-2 hover:bg-gray-100 rounded-lg transition text-gray-400"><i data-lucide="more-horizontal" class="w-4 h-4"></i></button>
-                        </td>
+            <table class="w-full text-left">
+                <thead>
+                    <tr class="text-[10px] uppercase text-gray-400 border-line bg-gray-50/30">
+                        <th class="px-6 py-4">Full Name</th>
+                        <th class="px-10 py-4">Date</th>
+                        <th class="px-10 py-4">Status</th>
+                        <th class="px-6 py-4 text-right">Action</th>
                     </tr>
-                <?php endforeach; ?>
-            <?php else: ?>
-                <tr>
-                    <td colspan="4" class="px-6 py-8 text-center text-gray-400">No approved or rejected records found.</td>
-                </tr>
+                </thead>
+                <tbody class="text-sm divide-y divide-[#dedede]">
+                    <?php if (!empty($approvalHistory)): ?>
+                        <?php foreach ($approvalHistory as $historyRow): ?>
+                            <?php
+                                $applicantName = (string) ($historyRow['applicant_name'] ?? 'N/A');
+                                $status = strtolower(trim((string) ($historyRow['approval_status'] ?? '')));
+                                $verificationDateLabel = 'N/A';
+
+                                $timestamp = strtotime((string) ($historyRow['activity_date'] ?? ''));
+                                if ($timestamp !== false) {
+                                    $verificationDateLabel = date('M d, Y', $timestamp);
+                                }
+
+                                $statusLabel = $status === 'approved' ? 'Approved' : 'Rejected';
+                                $statusClass = $status === 'approved'
+                                    ? 'bg-green-100 text-green-700 border border-green-200'
+                                    : 'bg-red-100 text-red-700 border border-red-200';
+                            ?>
+                            <tr class="hover:bg-gray-50/50 transition">
+                                <td class="px-6 py-4">
+                                    <div class="font-semibold text-[#262626]"><?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?></div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="font-semibold text-[#262626]"><?php echo htmlspecialchars($verificationDateLabel, ENT_QUOTES, 'UTF-8'); ?></div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span class="px-3 py-1 text-[10px] font-bold uppercase rounded-md <?php echo htmlspecialchars($statusClass, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                                </td>
+                                <td class="px-6 py-4 text-right">
+                                    <button class="p-2 hover:bg-gray-100 rounded-lg transition text-gray-400"><i data-lucide="more-horizontal" class="w-4 h-4"></i></button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="4" class="px-6 py-8 text-center text-gray-400">No approved or rejected records found.</td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+
+            <?php if ($totalPages > 1): ?>
+            <div class="p-4 bg-gray-50/50 border-t border-[#dedede] flex justify-between items-center text-xs text-gray-500 font-semibold">
+                <div>
+                    Showing page <?php echo $page; ?> of <?php echo $totalPages; ?>
+                </div>
+                <div class="flex gap-2">
+                    <a href="?page=<?php echo max(1, $page - 1); ?>" 
+                       class="px-4 py-2 border border-[#dedede] rounded-lg bg-white hover:bg-gray-50 text-[#262626] transition flex items-center gap-1 <?php if($page <= 1) echo 'opacity-50 pointer-events-none'; ?>">
+                        <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> Previous
+                    </a>
+                    <a href="?page=<?php echo min($totalPages, $page + 1); ?>" 
+                       class="px-4 py-2 border border-[#dedede] rounded-lg bg-white hover:bg-gray-50 text-[#262626] transition flex items-center gap-1 <?php if($page >= $totalPages) echo 'opacity-50 pointer-events-none'; ?>">
+                        Next <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                    </a>
+                </div>
+            </div>
             <?php endif; ?>
-        </tbody>
-    </table>
-</div>
+        </div>
 
         </div>
     </div>
