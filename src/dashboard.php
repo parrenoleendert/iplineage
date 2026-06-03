@@ -292,7 +292,7 @@ if ($applicationsDateColumn !== null) {
         <div class="mt-8 bg-card-custom rounded-2xl overflow-hidden shadow-sm">
     <div class="p-6 border-line flex justify-between items-center bg-gray-50/50">
         <div>
-            <h3 class="font-bold uppercase tracking-widest text-[10px] text-gray-500">Activity History</h3>
+            <h3 class="font-bold uppercase tracking-widest text-[10px] text-gray-500">Rejected History</h3>
         </div>
     </div>
 
