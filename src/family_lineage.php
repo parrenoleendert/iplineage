@@ -45,8 +45,36 @@ try {
     </header>
 
     <main class="p-4 md:p-10"> 
-        <div class="lineage-layout"> 
-            <div id="FamilyChart" class="f3">
+        <div class="lineage-layout relative"> 
+            <div id="FamilyChart" class="f3"></div>
+
+            <!-- Floating Legend (top-left) - vertical rectangle samples -->
+            <div id="FamilyLegend" class="absolute top-7 right-7 z-1000">
+                <div class="bg-white border border-gray-200 rounded-lg shadow p-3 text-sm text-gray-700 w-45">
+                    <div class="font-bold mb-2">Legend</div>
+                    <div class="space-y-2">
+
+                            <div class="flex items-center gap-3">
+                            <!-- Male sample -->
+                            <div class="node-card node-male" style="min-width:70px; min-height:50px; padding:10px;">
+                                <div style= "height: 30px; width: 30px; font-size: 12px;" class="node-avatar node-avatar-male">AB</div>
+                                <div class="node-top">
+                                    <div class="node-name">Male</div>
+                                </div>
+                                <div class="node-meta"><div><strong>ID:</strong> 123</div></div>
+                            </div>
+
+                            <!-- Female sample -->
+                            <div class="node-card node-female" style="min-width:70px; min-height:50px; padding:10px;">
+                                <div style= "height: 30px; width: 30px; font-size: 12px;" class="node-avatar node-avatar-female">CD</div>
+                                <div class="node-top">
+                                    <div class="node-name">Female</div>
+                                </div>
+                                <div class="node-meta"><div><strong>ID:</strong> 124</div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
             <aside id="ProfilePanel" class="profile-panel is-hidden">
                 <h2 class="profile-title">Profile</h2> 
@@ -265,10 +293,15 @@ try {
             // Create the family chart using family-chart library
             const mainId = String(selectedMemberId || '');
 
+            // === Lineage layout settings - adjust these to change spacing and visibility ===
+            // - setCardXSpacing(value): horizontal spacing between cards
+            // - setCardYSpacing(value): vertical spacing between card rows
+            // - setShowSiblingsOfMain(true/false): show sibling group for main person
+            // To change card appearance, edit the setCardInnerHtmlCreator below.
             const f3Chart = f3.createChart('#FamilyChart', chartData)
                 .setTransitionTime(1000)
-                .setCardXSpacing(250)
-                .setCardYSpacing(280)
+                .setCardXSpacing(250) // adjust horizontal gap here
+                .setCardYSpacing(280) // adjust vertical gap here
                 .setShowSiblingsOfMain(true)
                 .setSortChildrenFunction((a, b) => {
                     const aId = String(a.id || '');
@@ -287,11 +320,14 @@ try {
             }
 
             // Configure card design (colors and node layout)
+            // === Card HTML and content ===
+            // Edit the inner HTML below to change what appears on each node.
+            // The function `setCardInnerHtmlCreator` returns the HTML for a node.
             f3Chart.setCardHtml()
                 .setStyle('rect')
                 .setOnCardClick((event, node) => {
                     event.stopPropagation();
-
+    
                     const memberId = String(node?.data?.id || '');
                     if (!memberId) {
                         return;

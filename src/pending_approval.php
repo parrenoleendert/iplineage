@@ -50,6 +50,15 @@ if ($columnResult instanceof mysqli_result) {
 
 $idColumn = first_existing_column($columns, ['id', 'pending_approval_id', 'approval_id']);
 $approveRejectDateColumn = first_existing_column($columns, ['approve_reject_date', 'approved_at', 'updated_at']);
+$remarksColumn = first_existing_column($columns, ['rejected_remarks', 'rejection_remarks', 'remarks', 'rejection_reason', 'reason', 'comment', 'comments']);
+
+if ($sourceTable === 'pending_approvals' && $remarksColumn === null) {
+    $alterRemarksSql = "ALTER TABLE pending_approvals ADD COLUMN rejection_remarks TEXT NULL AFTER approval_status";
+    if ($conn->query($alterRemarksSql)) {
+        $remarksColumn = 'rejection_remarks';
+        $columns[] = 'rejection_remarks';
+    }
+}
 
 $verifiedByColumn = first_existing_column($columns, ['verified_by', 'verifier_name']);
 $proposedRoleColumn = first_existing_column($columns, ['proposed_role', 'target_role']);
@@ -66,15 +75,23 @@ if (
     $approvalId = (int) $_POST['approval_id'];
     $approvalAction = strtolower(trim((string) $_POST['approval_action']));
     $newStatus = $approvalAction === 'reject' ? 'rejected' : 'approved';
+    $postedRemarks = trim((string) ($_POST['rejection_remarks'] ?? $_POST['remarks'] ?? ''));
 
     $updateSql = "UPDATE {$sourceTable} SET {$statusColumn} = ?";
     if ($approveRejectDateColumn !== null) {
         $updateSql .= ", {$approveRejectDateColumn} = CURDATE()";
     }
+    if ($newStatus === 'rejected' && $remarksColumn !== null) {
+        $updateSql .= ", {$remarksColumn} = ?";
+    }
     $updateSql .= " WHERE {$idColumn} = ?";
     $updateStmt = $conn->prepare($updateSql);
     if ($updateStmt) {
-        $updateStmt->bind_param('si', $newStatus, $approvalId);
+        if ($newStatus === 'rejected' && $remarksColumn !== null) {
+            $updateStmt->bind_param('ssi', $newStatus, $postedRemarks, $approvalId);
+        } else {
+            $updateStmt->bind_param('si', $newStatus, $approvalId);
+        }
         $updateStmt->execute();
         $updateStmt->close();
     } else {
@@ -270,6 +287,7 @@ if ($targetTribeColumn === null || $verificationDateColumn === null || $statusCo
                                         <form method="post" action="pending_approval.php?sort=<?php echo htmlspecialchars($sort, ENT_QUOTES, 'UTF-8'); ?>&page=<?php echo (int) $currentPage; ?>" class="inline-block">
                                             <input type="hidden" name="approval_id" value="<?php echo htmlspecialchars((string) ($approvalRow['approval_id'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>">
                                             <input type="hidden" name="approval_action" value="reject">
+                                            <input type="hidden" name="rejection_remarks" value="">
                                             <button type="submit" class="text-red-500 hover:text-red-700 font-bold text-[10px] uppercase px-2 py-2">Reject</button>
                                         </form>
                                         <form method="post" action="pending_approval.php?sort=<?php echo htmlspecialchars($sort, ENT_QUOTES, 'UTF-8'); ?>&page=<?php echo (int) $currentPage; ?>" class="inline-block">
@@ -317,5 +335,25 @@ if ($targetTribeColumn === null || $verificationDateColumn === null || $statusCo
             // Link your side panel function here
         }
     </script>
+            <script>
+                document.addEventListener('submit', (event) => {
+                    const form = event.target;
+                    if (!form.classList || !form.classList.contains('reject-approval-form')) {
+                        return;
+                    }
+
+                    const remarksInput = form.querySelector('input[name="rejection_remarks"]');
+                    const remarks = window.prompt('Enter rejection remarks:');
+
+                    if (remarks === null) {
+                        event.preventDefault();
+                        return;
+                    }
+
+                    if (remarksInput) {
+                        remarksInput.value = remarks.trim();
+                    }
+                });
+            </script>
 </body>
 </html>
