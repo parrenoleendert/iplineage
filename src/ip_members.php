@@ -306,54 +306,115 @@ function get_last_active_label($lastActive, $status) {
 
         <div class="relative">
 
+        <!-- FLOATING MEMBER CARD OVERLAY -->
         <aside id="floatingMemberCard" class="hidden fixed inset-0 z-[60] items-center justify-center p-4 sm:p-6">
-            <div id="floatingMemberBackdrop" class="absolute inset-0 bg-black/40"></div>
-            <div class="relative z-10 w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-[0_0_20px_rgba(0,0,0,0.3)]">
-            <div class="mb-4 flex items-center justify-between">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-[#262626]">Member Profile</h3>
-                <button id="closeFloatingMemberCard" class="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-[#262626] transition">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                </button>
-            </div>
-
-            <div class="mb-6 flex items-center gap-4 p-4">
-                <div id="floatingInitials" class="h-24 w-24 flex-shrink-0 rounded-full bg-[#262626] text-white flex items-center justify-center">
-                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                </div>
-                <div>
-                    <p id="floatingFullName" class="text-lg font-bold text-[#262626]">No member selected</p>
-                    <p class="text-sm text-gray-500">examplemail@example.com</p>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <section class="rounded-xl bg-[#f8f8f7] p-4">
-                    <h4 class="mb-3 text-xs font-bold uppercase tracking-wide text-[#262626]">Personal Info</h4>
-                    <div class="space-y-3 text-sm">
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">First Name</span><span id="floatingFirstName" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Middle Name</span><span id="floatingMiddleName" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Last Name</span><span id="floatingLastName" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Member ID</span><span id="floatingMemberId" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Birthdate</span><span id="floatingBirthdate" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Place of Birth</span><span id="floatingPlaceOfBirth" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Current Address</span><span id="floatingCurrentAddress" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Contact Information</span><span id="floatingContactInformation" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Tribe / Clan</span><span id="floatingTribeClan" class="font-semibold text-[#262626]">-</span></div>
-                        <div class="flex items-center justify-between gap-3"><span class="text-gray-500">Barangay</span><span id="floatingBarangay" class="font-semibold text-[#262626]">-</span></div>
+            <div id="floatingMemberBackdrop" class="absolute inset-0 bg-black/40 backdrop-blur-xs"></div>
+            
+            <div class="relative z-10 w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-[0_10px_30px_rgba(0,0,0,0.15)] border border-[#ececea] flex flex-col">
+                
+                <!-- Card Header Layout -->
+                <div class="px-6 py-5 border-b border-[#ececea] flex items-center justify-between bg-gray-50/50">
+                    <div class="flex items-center gap-2">
+                        <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-[#262626]">Verified Member Record</h3>
                     </div>
-                </section>
+                    <button id="closeFloatingMemberCard" class="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-[#262626] transition-all duration-200">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
 
-                <section class="rounded-xl bg-[#f8f8f7] p-4">
-                    <h4 class="mb-3 text-xs font-bold uppercase tracking-wide text-[#262626]">Family Members</h4>
-                    <div class="space-y-3 text-sm">
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Parents</span><span id="floatingParents" class="font-semibold text-[#262626]">Open Family Tree</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Siblings</span><span id="floatingSiblings" class="font-semibold text-[#262626]">Open Family Tree</span></div>
-                        <div class="flex items-center justify-between gap-3 border-b border-[#ececea] pb-2"><span class="text-gray-500">Spouse</span><span id="floatingSpouse" class="font-semibold text-[#262626]">Open Family Tree</span></div>
-                        <div class="flex items-center justify-between gap-3"><span class="text-gray-500">Children</span><span id="floatingChildren" class="font-semibold text-[#262626]">Open Family Tree</span></div>
+                <!-- Main Content Area Split -->
+                <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[#ececea]">
+                    
+                    <!-- Left Sidebar Profile Panel -->
+                    <div class="p-6 bg-gradient-to-b from-gray-50/30 to-white flex flex-col items-center text-center justify-center col-span-1 min-w-[240px]">
+                        <div class="flex items-center justify-center h-28 w-28 shrink-0 balance-profile-container">
+                            <div id="floatingInitials" class="h-28 w-28 rounded-full bg-gray-100 text-[#262626] flex items-center justify-center shadow-md font-bold text-3xl tracking-wide uppercase border-4 border-white ring-1 ring-gray-200 aspect-square object-cover border-[#dedede]">
+                                --
+                            </div>
+                        </div>
+                        <h2 id="floatingFullName" class="mt-4 text-xl font-bold text-[#262626] tracking-tight">No member selected</h2>
+                        <div class="mt-2 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+                            ID: <span id="floatingMemberId" class="ml-1 font-bold text-[#262626]">-</span>
+                        </div>
                     </div>
 
-                </section>
-            </div>
+                    <!-- Right Structured Information Fields -->
+                    <div class="p-6 col-span-2 space-y-6">
+                        
+                        <!-- Core Identity Block -->
+                        <div>
+                            <h4 class="mb-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">Core Identity</h4>
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
+                                    <span class="block text-[11px] font-medium text-gray-400 uppercase">First Name</span>
+                                    <span id="floatingFirstName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
+                                </div>
+                                <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
+                                    <span class="block text-[11px] font-medium text-gray-400 uppercase">Middle Name</span>
+                                    <span id="floatingMiddleName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
+                                </div>
+                                <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
+                                    <span class="block text-[11px] font-medium text-gray-400 uppercase">Last Name</span>
+                                    <span id="floatingLastName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vital & Heritage Details Block -->
+                        <div>
+                            <h4 class="mb-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">Vital & Heritage Information</h4>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                                <!-- Row 1: Birth Info -->
+                                <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
+                                    <span class="text-xs font-medium text-gray-500">Birthdate</span>
+                                    <span id="floatingBirthdate" class="text-xs font-bold text-[#262626]">-</span>
+                                </div>
+                                <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
+                                    <span class="text-xs font-medium text-gray-500">Place of Birth</span>
+                                    <span id="floatingPlaceOfBirth" class="text-xs font-bold text-[#262626] max-w-[180px] text-right truncate" title="-">-</span>
+                                </div>
+                                <!-- Row 2: Cultural / Local Identity -->
+                                <div class="flex items-center justify-between py-2.5 border-b border-[#ececea] sm:border-b-0">
+                                    <span class="text-xs font-medium text-gray-500">Tribe / Clan</span>
+                                    <span id="floatingTribeClan" class="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200/70 px-2.5 py-0.5 rounded-md">-</span>
+                                </div>
+                                <div class="flex items-center justify-between py-2.5 border-b border-[#ececea] sm:border-b-0">
+                                    <span class="text-xs font-medium text-gray-500">Barangay</span>
+                                    <span id="floatingBarangay" class="text-xs font-bold text-[#262626]">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Contact & Locality Block -->
+                        <div class="pt-2 border-t border-dashed border-[#ececea]">
+                            <h4 class="mb-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">Contact & Address</h4>
+                            <div class="space-y-3">
+                                <div class="flex items-start gap-4">
+                                    <div class="w-20 text-[11px] font-medium text-gray-400 uppercase mt-0.5 shrink-0">Contact</div>
+                                    <div id="floatingContactInformation" class="text-xs font-semibold text-[#262626] bg-gray-50/80 px-3 py-1.5 rounded-lg w-full">-</div>
+                                </div>
+                                <div class="flex items-start gap-4">
+                                    <div class="w-20 text-[11px] font-medium text-gray-400 uppercase mt-0.5 shrink-0">Address</div>
+                                    <div id="floatingCurrentAddress" class="text-xs font-semibold text-[#262626] bg-gray-50/80 px-3 py-1.5 rounded-lg w-full">-</div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Bottom Footer Actions Block -->
+                <div class="px-6 py-4 bg-gray-50/50 border-t border-[#ececea] flex justify-end gap-3">
+                    <button type="button" onclick="closeMemberCard()" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-xl hover:bg-white text-gray-600 transition-all">
+                        Close View
+                    </button>
+                    <a id="floatingFamilyTreeLink" href="family_lineage.php" class="inline-flex items-center gap-2 bg-[#262626] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-[#404040] transition-all shadow-sm">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+                        View Full Family Lineage
+                    </a>
+                </div>
+
             </div>
         </aside>
 
@@ -381,7 +442,7 @@ function get_last_active_label($lastActive, $status) {
                                 $sexValue = strtolower(trim((string) ($ipmember['sex'] ?? '')));
                                 $initialClass = 'bg-gray-100 text-[#262626] border-[#dedede]';
                                 if ($sexValue === 'male' || $sexValue === 'm') {
-                                    $initialClass = 'bg-[#18181b] text-[#a1a1aa] border-[#3f3f46]';
+                                    $initialClass = 'bg-[#18181b] text-[#e4e4e7] border-[#3f3f46]';
                                 } elseif ($sexValue === 'female' || $sexValue === 'f') {
                                     $initialClass = 'bg-[#e4e4e7] text-[#18181b] border-[#a1a1aa]';
                                 }
@@ -403,6 +464,7 @@ function get_last_active_label($lastActive, $status) {
                                 data-current-address="<?php echo escape_html($ipmember['current_address'] ?? 'N/A'); ?>"
                                 data-contact-information="<?php echo escape_html($ipmember['contact_information'] ?? 'N/A'); ?>"
                                 data-member-id="<?php echo escape_html($ipmember['member_id'] ?? 'N/A'); ?>"
+                                data-sex="<?php echo escape_html($ipmember['sex'] ?? ''); ?>"
                                 data-tribe-clan="<?php echo escape_html($tribeLabel); ?>"
                                 data-barangay="<?php echo escape_html($ipmember['barangay'] ?? 'N/A'); ?>">
                                 <td class="px-6 py-4">
@@ -442,11 +504,22 @@ function get_last_active_label($lastActive, $status) {
                                         <span class="text-xs text-gray-400">No tree key</span>
                                     <?php endif; ?>
                                 </td>
-                                <td class="px-6 py-4 text-right space-x-2">
-                                    <button title="Edit Connections" class="row-action p-2 hover:bg-gray-100 text-gray-400 rounded-lg transition">
-                                        <i data-lucide="edit-3" class="w-4 h-4"></i>
-                                    </button>
-                                    <button class="row-action p-2 hover:bg-gray-100 rounded-lg transition"><i data-lucide="more-horizontal" class="w-4 h-4 text-gray-400"></i></button>
+                                <td class="px-6 py-4 text-right">
+                                    <div class="relative inline-block group">
+                                        <button class="row-action p-2 hover:bg-gray-100 rounded-lg transition" title="More actions">
+                                            <i data-lucide="more-horizontal" class="w-4 h-4 text-gray-400"></i>
+                                        </button>
+                                        <div class="hidden absolute right-0 mt-1 w-48 bg-white border border-[#dedede] rounded-lg shadow-lg z-50 group-hover:block">
+                                            <button class="disable-user-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-red-50 hover:text-red-600 transition border-b border-[#ececea]" data-member-id="<?php echo escape_html($ipmember['member_id'] ?? ''); ?>" data-ip-member-id="<?php echo escape_html($ipmember['ip_member_id'] ?? ''); ?>">
+                                                <i data-lucide="ban" class="w-4 h-4 inline-block mr-2"></i>
+                                                Disable User
+                                            </button>
+                                            <button class="disable-account-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-red-50 hover:text-red-600 transition" data-member-id="<?php echo escape_html($ipmember['member_id'] ?? ''); ?>" data-ip-member-id="<?php echo escape_html($ipmember['ip_member_id'] ?? ''); ?>">
+                                                <i data-lucide="lock" class="w-4 h-4 inline-block mr-2"></i>
+                                                Disable Account
+                                            </button>
+                                        </div>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -549,6 +622,7 @@ function get_last_active_label($lastActive, $status) {
                     return;
                 }
 
+                // Inside your existing click event function:
                 floatingFullName.textContent = row.dataset.fullName || 'N/A';
                 floatingFirstName.textContent = row.dataset.firstName || 'N/A';
                 floatingMiddleName.textContent = row.dataset.middleName || 'N/A';
@@ -561,14 +635,25 @@ function get_last_active_label($lastActive, $status) {
                 floatingTribeClan.textContent = row.dataset.tribeClan || 'N/A';
                 floatingBarangay.textContent = row.dataset.barangay || 'N/A';
 
-                if (floatingParents) floatingParents.textContent = 'See Family Tree';
-                if (floatingSiblings) floatingSiblings.textContent = 'See Family Tree';
-                if (floatingSpouse) floatingSpouse.textContent = 'See Family Tree';
-                if (floatingChildren) floatingChildren.textContent = 'See Family Tree';
+                // Handle dynamic profile context letter badge
+                if (floatingInitials) {
+                    floatingInitials.textContent = row.dataset.initials || '--';
+
+                    const sex = (row.dataset.sex || '').toLowerCase();
+                    floatingInitials.className = 'h-28 w-28 rounded-full flex items-center justify-center shadow-md font-bold text-3xl tracking-wide uppercase border-4 border-white ring-1 ring-gray-200 aspect-square object-cover';
+                    if (sex === 'male' || sex === 'm') {
+                        floatingInitials.classList.add('bg-[#18181b]', 'text-[#e4e4e7]', 'border-[#3f3f46]');
+                    } else if (sex === 'female' || sex === 'f') {
+                        floatingInitials.classList.add('bg-[#e4e4e7]', 'text-[#18181b]', 'border-[#a1a1aa]');
+                    } else {
+                        floatingInitials.classList.add('bg-gray-100', 'text-[#262626]', 'border-[#dedede]');
+                    }
+                }
 
                 if (floatingFamilyTreeLink) {
-                    const selectedMemberId = row.dataset.memberId || '';
+                    const selectedMemberId = row.dataset.ipMemberId || row.dataset.memberId || '';
                     if (selectedMemberId && selectedMemberId !== 'N/A') {
+                        // Direct matching to family lineage viewer dashboard
                         floatingFamilyTreeLink.href = 'family_lineage.php?member_id=' + encodeURIComponent(selectedMemberId);
                     } else {
                         floatingFamilyTreeLink.href = 'family_lineage.php';
@@ -595,6 +680,39 @@ function get_last_active_label($lastActive, $status) {
             if (event.key === 'Escape' && floatingMemberCard && !floatingMemberCard.classList.contains('hidden')) {
                 closeMemberCard();
             }
+        });
+
+        // Handle disable user and disable account buttons
+        document.querySelectorAll('.disable-user-btn').forEach(button => {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                const memberId = this.dataset.memberId;
+                const ipMemberId = this.dataset.ipMemberId;
+                
+                if (confirm('Are you sure you want to disable this user? This action cannot be easily undone.')) {
+                    // Send request to disable user
+                    console.log('Disabling user:', memberId || ipMemberId);
+                    // You can add AJAX call here to backend API
+                    // Example: fetch('/api/user/disable', { method: 'POST', body: JSON.stringify({member_id: memberId}) })
+                    alert('User disable functionality to be implemented');
+                }
+            });
+        });
+
+        document.querySelectorAll('.disable-account-btn').forEach(button => {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                const memberId = this.dataset.memberId;
+                const ipMemberId = this.dataset.ipMemberId;
+                
+                if (confirm('Are you sure you want to disable this account? This action cannot be easily undone.')) {
+                    // Send request to disable account
+                    console.log('Disabling account:', memberId || ipMemberId);
+                    // You can add AJAX call here to backend API
+                    // Example: fetch('/api/account/disable', { method: 'POST', body: JSON.stringify({member_id: memberId}) })
+                    alert('Account disable functionality to be implemented');
+                }
+            });
         });
     </script>
 </body>

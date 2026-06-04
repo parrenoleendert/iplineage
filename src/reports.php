@@ -235,23 +235,23 @@ if ($regTrendResult) {
     <div class="ml-64 p-6 md:p-8 min-h-screen">
         
         <!-- Header Framework -->
-        <header class="flex justify-between items-center pb-5 border-b border-neutral-200/80 mb-6">
-            <div class="relative w-80">
-                <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400"></i>
+        <header class="flex justify-between items-center pb-6 border-line mb-5">
+            <div class="relative w-96">
+                <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"></i>
                 <input type="text" placeholder="Search lineage or documents..." 
-                    class="w-full bg-white border border-neutral-200 rounded-xl py-2.5 pl-11 pr-4 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm">
+                    class="w-full bg-white border border-[#dedede] rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm">
             </div>
 
-            <div class="flex items-center gap-3.5">
-                <button class="p-2 text-neutral-400 hover:text-neutral-900 transition relative bg-white border border-neutral-200 rounded-xl hover:shadow-sm">
-                    <i data-lucide="bell" class="w-4 h-4"></i>
-                    <span class="absolute top-2 right-2 w-1.5 h-1.5 bg-neutral-900 rounded-full border border-white"></span>
+            <div class="flex items-center gap-4">
+                <button class="p-2 text-gray-400 hover:text-[#262626] transition relative">
+                    <i data-lucide="bell" class="w-5 h-5"></i>
+                    <span class="absolute top-2 right-2 w-2 h-2 bg-[#262626] rounded-full border-2 border-[#f3f4f1]"></span>
                 </button>
-                <div class="flex items-center gap-2.5 bg-white border border-neutral-200 p-1 pr-3.5 rounded-xl shadow-sm">
-                    <div class="w-7 h-7 rounded-lg bg-neutral-900 text-neutral-50 flex items-center justify-center font-bold text-[11px] uppercase tracking-wider"><?php echo htmlspecialchars($initials); ?></div>
-                    <div class="flex flex-col">
-                        <p class="text-xs font-bold leading-tight text-neutral-800"><?php echo htmlspecialchars($displayName); ?></p>
-                        <p class="text-[9px] text-neutral-400 font-medium uppercase tracking-wider mt-0.5"><?php echo htmlspecialchars($roleLabel); ?></p>
+                <div class="flex items-center gap-3 bg-white border border-[#dedede] p-1.5 pr-4 rounded-xl shadow-sm">
+                    <div class="w-8 h-8 rounded-lg bg-[#262626] text-[#f3f4f1] flex items-center justify-center font-bold text-xs uppercase"><?php echo htmlspecialchars($initials); ?></div>
+                    <div>
+                        <p class="text-xs font-bold leading-none text-[#262626]"><?php echo htmlspecialchars($displayName); ?></p>
+                        <p class="text-[10px] text-gray-400 uppercase tracking-tighter"><?php echo htmlspecialchars($roleLabel); ?></p>
                     </div>
                 </div>
             </div>

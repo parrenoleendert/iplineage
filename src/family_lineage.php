@@ -32,7 +32,7 @@ try {
     <link rel="stylesheet" href="../css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/family-chart@0.9.0/dist/styles/family-chart.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <title>IP Lineage - Family Tree</title>
+    <title>IP Lineage - Family Lineage</title>
 </head>
 <body class="min-h-screen">
     <header class="bg-white border-b border-[#dedede] p-4 md:px-8 flex justify-between items-center">
@@ -40,7 +40,7 @@ try {
             <a href="ip_members.php" class="p-2 hover:bg-gray-100 rounded-lg transition">
                 <i data-lucide="arrow-left" class="w-5 h-5 text-gray-600"></i>
             </a>
-            <h1 class="text-lg font-bold text-[#262626]">Family Tree</h1>
+            <h1 class="text-lg font-bold text-[#262626]">Family Lineage</h1>
         </div>
     </header>
 
