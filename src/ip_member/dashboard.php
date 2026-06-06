@@ -222,179 +222,198 @@ if (count($leadershipDisplayRows) > 3) {
                 <h1 class="text-2xl font-bold text-[#262626]">Dashboard</h1>
             </section>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-start mb-6 min-vh-150">
-                <div class="bg-card-custom p-5 rounded-2xl shadow-sm border border-gray-100 md:row-span-2 min-h-[280px] transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
-                    <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-bold text-lg text-[#262626]">Profile Summary</h3>
-                        <span class="px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase tracking-wider">
-                            Verified
-                        </span>
-                    </div>
+            <!-- Blinking Attention Effect -->
+            <style>
+                @keyframes attention-blink {
+                    0%, 100% {
+                        border-color: #dedede;
+                        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+                    }
+                    50% {
+                        border-color: #262626;
+                        box-shadow: 0 0 8px rgba(38, 38, 38, 0.2);
+                    }
+                }
+                .animate-attention-pulse {
+                    animation: attention-blink 1.8s infinite ease-in-out;
+                }
+            </style>
 
-                    <div class="flex flex-col items-center text-center pb-4 border-b border-gray-100 mb-4">
-                        <div class="w-[72px] h-[72px] rounded-full bg-[#262626] text-white flex items-center justify-center shadow-sm mb-3">
-                            <i data-lucide="user-round" class="w-8 h-8"></i>
-                        </div>
-                        <h3 class="text-lg font-bold text-[#262626]"><?php echo htmlspecialchars($profileName, ENT_QUOTES, 'UTF-8'); ?></h3>
-                        <p class="text-sm text-gray-500 font-medium"><?php echo htmlspecialchars($profileStatus, ENT_QUOTES, 'UTF-8'); ?> • <?php echo htmlspecialchars($profileAgeLabel, ENT_QUOTES, 'UTF-8'); ?> Years Old</p>
-                    </div>
-
-                    <div class="space-y-3">
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-500 font-medium">Sex</span>
-                            <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileSex, ENT_QUOTES, 'UTF-8'); ?></span>
-                        </div>
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-500 font-medium">Date of Birth</span>
-                            <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileBirthdate, ENT_QUOTES, 'UTF-8'); ?></span>
-                        </div>
-                        <div class="flex justify-between text-sm">
-                            <span class="text-gray-500 font-medium">Tribe</span>
-                            <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileTribe, ENT_QUOTES, 'UTF-8'); ?></span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="bg-card-custom p-4 rounded-2xl shadow-sm border border-gray-100 min-h-[160px] flex flex-col justify-between transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
+            <!-- Main Dashboard Layout Content Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start mb-6">
+                
+                <!-- LEFT COLUMN: PROFILE SUMMARY -->
+                <div class="bg-white p-6 rounded-2xl border border-[#dedede] shadow-xs min-h-[460px] flex flex-col justify-between">
                     <div>
-                        <p class="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Lineage</p>
-                        <h3 class="text-sm font-bold text-[#262626]">View Lineage</h3>
-                        <p class="text-xs text-gray-500 mt-1">Open your family tree record.</p>
-                    </div>
+                        <div class="mb-6">
+                            <h3 class="text-xs uppercase tracking-widest text-gray-400 font-bold">Profile Summary</h3>
+                        </div>
 
-                    <a href="<?php echo htmlspecialchars($memberLineageUrl, ENT_QUOTES, 'UTF-8'); ?>" class="inline-flex items-center justify-center mt-4 px-3 py-2 rounded-lg bg-[#262626] text-white text-[10px] font-bold uppercase tracking-wider hover:bg-[#404040] transition">
-                        View Lineage
-                    </a>
+                        <!-- Profile Avatar Blocks Layout -->
+                        <div class="flex items-center gap-4 pb-6 border-b border-[#ececea] mb-6">
+                            <div class="w-16 h-16 rounded-xl bg-[#262626] text-white flex items-center justify-center font-bold text-lg uppercase tracking-wider shadow-xs shrink-0 select-none">
+                                <?php 
+                                    $words = explode(" ", trim($profileName));
+                                    $initials = "";
+                                    foreach ($words as $w) {
+                                        $initials .= mb_substr($w, 0, 1, "UTF-8");
+                                    }
+                                    echo htmlspecialchars(mb_strtoupper(mb_substr($initials, 0, 2, "UTF-8")), ENT_QUOTES, 'UTF-8');
+                                ?>
+                            </div>
+                            <div class="min-w-0">
+                                <h3 class="text-xl font-bold text-[#262626] tracking-tight truncate"><?php echo htmlspecialchars($profileName, ENT_QUOTES, 'UTF-8'); ?></h3>
+                                <p class="text-sm text-gray-500 font-semibold mt-1 tracking-wide">
+                                    <?php echo htmlspecialchars(($profileRole ?? 'IP Member'), ENT_QUOTES, 'UTF-8'); ?>
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4 text-sm">
+                            <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
+                                <span class="text-gray-400 font-medium">Sex / Gender</span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileSex, ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
+                                <span class="text-gray-400 font-medium">Date of Birth</span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileBirthdate, ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
+                                <span class="text-gray-400 font-medium">Registered Tribe</span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileTribe, ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
+                                <span class="text-gray-400 font-medium">Email Address</span>
+                                <span class="text-[#262626] font-semibold truncate max-w-[180px]"><?php echo htmlspecialchars(($profileEmail ?? 'leendert.parreno@gmail.com'), ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                            <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
+                                <span class="text-gray-400 font-medium">Contact Number</span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars(($profileContactNum ?? '+63 912 123 4567'), ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                            <div class="flex justify-between items-center pb-1">
+                                <span class="text-gray-400 font-medium">Address</span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars(($profileAddress ?? 'Hamtic, Antique'), ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="bg-card-custom p-4 rounded-2xl shadow-sm border border-gray-100 min-h-[160px] flex flex-col justify-between transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
-                    <div>
-                        <p class="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Announcement</p>
-                        <h3 class="text-sm font-bold text-[#262626]">Scheduled Community Assembly</h3>
-                        <p class="text-xs text-gray-500 mt-1">All IP members are requested to attend on April 20, 2026 at 9:00 AM in the Barangay Hall.</p>
+                <!-- MIDDLE COLUMN: PERSONAL LINEAGE & LEADERSHIP STRUCTURE -->
+                <div class="lg:col-span-2 space-y-6 flex flex-col justify-between min-h-[460px]">
+                    
+                    <!-- PERSONAL LINEAGE CARD -->
+                    <div class="bg-white p-6 rounded-2xl border border-[#dedede] shadow-xs flex flex-col sm:flex-row justify-between sm:items-center gap-4 animate-attention-pulse">
+                        <div class="space-y-1">
+                            <h3 class="text-base font-bold text-[#262626]">Personal Ancestral Lineage</h3>
+                            <p class="text-sm text-gray-500 max-w-xl">View your structural multi-generational family tree, manage lineage records, and track verified indigenous ancestral nodes.</p>
+                        </div>
+                        <div class="shrink-0">
+                            <a href="<?php echo htmlspecialchars($memberLineageUrl, ENT_QUOTES, 'UTF-8'); ?>" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#262626] text-white text-sm font-bold hover:bg-[#404040] transition shadow-xs">
+                                <span>Open Family Tree</span>
+                                <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                            </a>
+                        </div>
                     </div>
 
-                    <div class="inline-flex items-center gap-2 text-[11px] font-semibold text-[#262626] mt-4">
-                        <i data-lucide="calendar-days" class="w-4 h-4"></i>
-                        <span>Posted by Tribal Office</span>
-                    </div>
-                </div>
-                <div class="bg-card-custom p-4 rounded-2xl shadow-sm border border-gray-100 h-[130px] min-h-[130px] max-h-[130px] min-w-[10px] md:col-span-2 transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300 overflow-hidden">
-                    <div class="h-full flex flex-col min-h-0">
-                        <div>
-                            <p class="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Leadership Structure</p>
-                            
-                            <?php if (!empty($leadershipDisplayRows)): ?>
-                                <div class="mt-2 rounded-xl border border-[#dedede] overflow-hidden">
-                                    <table class="w-full table-auto text-left text-xs text-gray-600">
-                                        <thead class="bg-gray-50/70 text-[10px] uppercase tracking-widest text-gray-500 border-y border-[#dedede]">
-                                            <tr>
-                                                <th scope="col" class="px-4 py-2 font-bold">Position</th>
-                                                <th scope="col" class="px-4 py-2 font-bold">Official Name</th>
-                                                <th scope="col" class="px-4 py-2 font-bold">Term</th>
+                    <!-- LEADERSHIP STRUCTURE CARD -->
+                    <div class="bg-white p-6 rounded-2xl border border-[#dedede] shadow-xs flex-1 flex flex-col justify-between mt-auto">
+                        <div class="mb-4 flex items-center justify-between">
+                            <h3 class="text-base font-bold text-[#262626]">Leadership Structure</h3>
+                            <i data-lucide="users" class="w-4 h-4 text-gray-300"></i>
+                        </div>
+                        
+                        <?php if (!empty($leadershipDisplayRows)): ?>
+                            <div class="rounded-xl border border-[#ececea] overflow-hidden bg-white flex-1">
+                                <table class="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr class="text-xs uppercase tracking-wider text-gray-400 bg-gray-50/70 border-b border-[#ececea]">
+                                            <th scope="col" class="px-5 py-3.5 font-bold">Designated Position</th>
+                                            <th scope="col" class="px-5 py-3.5 font-bold">Official Name</th>
+                                            <th scope="col" class="px-5 py-3.5 font-bold">Term Coverage</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="text-sm text-gray-600 divide-y divide-[#ececea]">
+                                        <?php foreach ($leadershipDisplayRows as $leader): ?>
+                                            <tr class="hover:bg-gray-50/50 transition-colors">
+                                                <td class="px-5 py-3.5 font-bold text-[#262626]">
+                                                    <?php echo htmlspecialchars((string) ($leader['designation'] ?? 'Council Officer'), ENT_QUOTES, 'UTF-8'); ?>
+                                                </td>
+                                                <td class="px-5 py-3.5 font-medium">
+                                                    <?php echo htmlspecialchars((string) ($leader['official_name'] ?? 'N/A'), ENT_QUOTES, 'UTF-8'); ?>
+                                                </td>
+                                                <td class="px-5 py-3.5 text-gray-400 font-semibold">
+                                                    <?php echo htmlspecialchars((string) (($leader['term'] ?? '') !== '' ? $leader['term'] : 'Active Tenure'), ENT_QUOTES, 'UTF-8'); ?>
+                                                </td>
                                             </tr>
-                                        </thead>
-                                    </table>
-
-                                    <div class="h-[44px] overflow-y-auto">
-                                        <table class="w-full table-auto text-left text-xs text-gray-600">
-                                            <tbody>
-                                            <?php foreach ($leadershipDisplayRows as $leader): ?>
-                                                <tr class="border-b border-[#dedede] hover:bg-gray-50 transition-colors duration-200">
-                                                    <td class="px-4 py-2 font-semibold text-[#262626]">
-                                                        <?php echo htmlspecialchars((string) ($leader['designation'] ?? 'Officer'), ENT_QUOTES, 'UTF-8'); ?>
-                                                    </td>
-                                                    <td class="px-4 py-2">
-                                                        <?php echo htmlspecialchars((string) ($leader['official_name'] ?? 'N/A'), ENT_QUOTES, 'UTF-8'); ?>
-                                                    </td>
-                                                    <td class="px-4 py-2">
-                                                        <?php echo htmlspecialchars((string) (($leader['term'] ?? '') !== '' ? $leader['term'] : 'N/A'), ENT_QUOTES, 'UTF-8'); ?>
-                                                    </td>
-                                                </tr>
-                                            <?php endforeach; ?>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            <?php else: ?>
-                                <p class="mt-3 text-xs text-gray-500">No leadership records available.</p>
-                            <?php endif; ?>
-                        </div>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php else: ?>
+                            <div class="py-12 text-center border border-dashed border-[#dedede] rounded-xl bg-gray-50/50 flex-1 flex flex-col items-center justify-center">
+                                <p class="text-sm text-gray-400 font-medium">No system leadership records established at this time.</p>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
-            </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-start mb-6">
-                <div class="bg-card-custom p-4 rounded-2xl shadow-sm border border-gray-100 min-h-[160px] md:col-span-2 transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
+            <!-- LOWER LAYOUT ROW BLOCK -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start mb-6">
+                
+                <!-- LEFT: CULTURAL IDENTITY -->
+                <div class="lg:col-span-2 bg-white p-6 rounded-2xl border border-[#dedede] shadow-xs min-h-[250px] flex flex-col justify-between">
+                    <div class="mb-6 pb-3 border-b border-[#ececea] flex items-center justify-between">
+                        <h3 class="text-xs uppercase tracking-widest text-gray-400 font-bold">Cultural Identity</h3>
+                        <i data-lucide="fingerprint" class="w-4 h-4 text-gray-300"></i>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 flex-1">
+                        <div class="space-y-2">
+                            <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider">Traditions & Ritual Protocols</h4>
+                            <p class="text-sm text-gray-600 leading-relaxed font-medium"><?php echo nl2br(htmlspecialchars($tribeTraditions, ENT_QUOTES, 'UTF-8')); ?></p>
+                        </div>
+                        <div class="space-y-2">
+                            <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider">Indigenous Arts & Crafts</h4>
+                            <p class="text-sm text-gray-600 leading-relaxed font-medium"><?php echo nl2br(htmlspecialchars($tribeArtsCrafts, ENT_QUOTES, 'UTF-8')); ?></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RIGHT: UPLOADED DOCUMENTS -->
+                <div class="bg-white p-6 rounded-2xl border border-[#dedede] shadow-xs min-h-[250px] flex flex-col justify-between">
                     <div>
-                        <p class="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2">Traditions and Cultural Heritage</p>
-                        <h3 class="text-sm font-bold text-[#262626] mb-3"><?php echo htmlspecialchars($profileTribe, ENT_QUOTES, 'UTF-8'); ?></h3>
-                    </div>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <p class="text-[10px] font-bold text-gray-400 mb-2 uppercase tracking-tight">Traditions & Rituals</p>
-                            <p class="text-xs text-gray-600 leading-relaxed"><?php echo nl2br(htmlspecialchars($tribeTraditions, ENT_QUOTES, 'UTF-8')); ?></p>
+                        <div class="mb-4 pb-3 border-b border-[#ececea] flex items-center justify-between">
+                            <h3 class="text-xs uppercase tracking-widest text-gray-400 font-bold">Uploaded Documents</h3>
+                            <i data-lucide="folder-open" class="w-4 h-4 text-gray-300"></i>
                         </div>
-                        <div>
-                            <p class="text-[10px] font-bold text-gray-400 mb-2 uppercase tracking-tight">Arts & Crafts</p>
-                            <p class="text-xs text-gray-600 leading-relaxed"><?php echo nl2br(htmlspecialchars($tribeArtsCrafts, ENT_QUOTES, 'UTF-8')); ?></p>
-                        </div>
-                    </div>
-                </div>
-                <div class="bg-card-custom p-3 rounded-2xl shadow-sm border border-gray-100 h-[160px] min-h-[160px] flex flex-col overflow-hidden bg-gradient-to-br from-white to-[#f9faf9] transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
-                    <div class="flex items-center justify-between">
-                        <p class="text-[9px] uppercase tracking-widest text-gray-500 font-bold mb-1">Downloads</p>
-                        <span class="text-[9px] font-bold text-[#262626] bg-[#262626]/10 px-1.5 py-0.5 rounded-md">3 Files</span>
-                    </div>
 
-                    <div class="mt-2 space-y-1.5 overflow-y-auto pr-1">
-                        <div class="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 bg-white/90 hover:bg-white transition">
-                            <div class="flex items-center gap-1.5 min-w-0">
-                                <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-[#262626]/70"></i>
-                                <span class="text-[11px] font-medium text-[#262626] truncate">Barangay Emergency Hotline List</span>
+                        <div class="space-y-2.5">
+                            <!-- Document 1: PSA Birth Certificate -->
+                            <div class="flex items-center justify-between gap-4 p-2.5 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 border border-[#ececea] transition">
+                                <span class="text-sm font-semibold text-[#262626] truncate">PSA Birth Certificate</span>
+                                <a href="#" class="inline-flex items-center gap-1.5 bg-[#262626] text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-[#404040] transition shrink-0">
+                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Download
+                                </a>
                             </div>
-                            <a
-                                href="data:text/plain;charset=utf-8,Barangay%20Emergency%20Hotline%20List%0A%0ABarangay%20Hall%3A%200912-345-6789%0ABFP%20Fire%20Desk%3A%200998-111-2233%0APNP%20Assistance%3A%200917-444-5566%0ARural%20Health%20Unit%3A%200905-777-8899%0A"
-                                download="barangay_emergency_hotlines.txt"
-                                class="inline-flex items-center gap-1 rounded-md bg-[#262626] text-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide hover:bg-[#404040] transition"
-                            >
-                                <i data-lucide="download" class="w-3 h-3"></i> Download
-                            </a>
-                        </div>
 
-                        <div class="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 bg-white/90 hover:bg-white transition">
-                            <div class="flex items-center gap-1.5 min-w-0">
-                                <i data-lucide="clipboard-check" class="w-3.5 h-3.5 text-[#262626]/70"></i>
-                                <span class="text-[11px] font-medium text-[#262626] truncate">Disaster Preparedness Checklist</span>
+                            <!-- Document 2: NCIP Genealogy Form -->
+                            <div class="flex items-center justify-between gap-4 p-2.5 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 border border-[#ececea] transition">
+                                <span class="text-sm font-semibold text-[#262626] truncate">NCIP Genealogy Form</span>
+                                <a href="#" class="inline-flex items-center gap-1.5 bg-[#262626] text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-[#404040] transition shrink-0">
+                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Download
+                                </a>
                             </div>
-                            <a
-                                href="data:text/plain;charset=utf-8,Disaster%20Preparedness%20Checklist%0A%0A1.%20Prepare%20go-bag%20for%20each%20family%20member%0A2.%20Keep%20important%20documents%20in%20waterproof%20folder%0A3.%20Identify%20nearest%20evacuation%20site%0A4.%20Save%20barangay%20hotline%20numbers%0A"
-                                download="disaster_preparedness_checklist.txt"
-                                class="inline-flex items-center gap-1 rounded-md bg-[#262626] text-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide hover:bg-[#404040] transition"
-                            >
-                                <i data-lucide="download" class="w-3 h-3"></i> Download
-                            </a>
                         </div>
-
-                        <div class="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 bg-white/90 hover:bg-white transition">
-                            <div class="flex items-center gap-1.5 min-w-0">
-                                <i data-lucide="megaphone" class="w-3.5 h-3.5 text-[#262626]/70"></i>
-                                <span class="text-[11px] font-medium text-[#262626] truncate">Community Assembly Notice</span>
-                            </div>
-                            <a
-                                href="data:text/plain;charset=utf-8,Community%20Assembly%20Notice%0A%0ADate%3A%20April%2020%2C%202026%0ATime%3A%209%3A00%20AM%0AVenue%3A%20Barangay%20Hall%0A%0AAll%20IP%20members%20are%20requested%20to%20attend.%0A"
-                                download="community_assembly_notice.txt"
-                                class="inline-flex items-center gap-1 rounded-md bg-[#262626] text-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide hover:bg-[#404040] transition"
-                            >
-                                <i data-lucide="download" class="w-3 h-3"></i> Download
-                            </a>
-                        </div>
+                    </div>
+                    
+                    <div class="pt-3 flex items-center justify-between border-t border-[#ececea] mt-4">
+                        <a href="#" class="w-full text-center py-2 px-3 border border-[#262626] text-[#262626] rounded-xl text-xs font-bold hover:bg-gray-50 transition">
+                            View All Documents
+                        </a>
                     </div>
                 </div>
             </div>
-            
              
     <script>
         lucide.createIcons();
