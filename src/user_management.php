@@ -1,7 +1,13 @@
 <?php
 require_once __DIR__ . '/auth/guards.php';
 require_any_role(['admin']);
-include 'dbconfig.php';
+require_once __DIR__ . '/dbconfig.php';
+
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    http_response_code(500);
+    die('Database connection not established. Check src/dbconfig.php and MySQL service.');
+}
 
 // Get search parameters
 $searchQuery = isset($_GET['query']) ? trim($_GET['query']) : '';
@@ -256,6 +262,7 @@ function get_last_active_label($lastActive, $status) {
 <body class="min-h-screen">
 
     <?php $activeNav = 'user_management'; include __DIR__ . '/shared/sidebar.php'; ?>
+    <?php include __DIR__ . '/shared/topbar.php'; ?>
 
     <div class="ml-64 p-8">
         
@@ -272,15 +279,13 @@ function get_last_active_label($lastActive, $status) {
                     <i data-lucide="bell" class="w-5 h-5"></i>
                     <span class="absolute top-2 right-2 w-2 h-2 bg-[#262626] rounded-full border-2 border-[#f3f4f1]"></span>
                 </button>
-                <div class="flex items-center gap-3 bg-white border border-[#dedede] p-1.5 pr-4 rounded-xl shadow-sm">
+                <button id="profile-drawer-trigger" class="flex items-center gap-3 bg-white border border-[#dedede] p-1.5 pr-4 rounded-xl shadow-sm hover:border-gray-400 transition cursor-pointer">
                     <div class="w-8 h-8 rounded-lg bg-[#262626] text-[#f3f4f1] flex items-center justify-center font-bold text-xs uppercase"><?php echo htmlspecialchars($initials); ?></div>
                     <div>
-                        <div>
                         <p class="text-xs font-bold leading-none text-[#262626]"><?php echo htmlspecialchars($displayName); ?></p>
                         <p class="text-[10px] text-gray-400 uppercase tracking-tighter"><?php echo htmlspecialchars($roleLabel); ?></p>
                     </div>
-                    </div>
-                </div>
+                </button>
             </div>
         </header>
 

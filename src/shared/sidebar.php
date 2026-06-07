@@ -8,15 +8,20 @@ $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
 $isAdmin = $currentRole === 'admin';
 $isIpMember = $currentRole === 'ip_member';
 $activeNav = isset($activeNav) ? (string) $activeNav : 'dashboard';
+
 $isIpMemberPage = strpos((string) ($_SERVER['SCRIPT_NAME'] ?? ''), '/ip_member/') !== false;
+$basePath = $isIpMemberPage ? '../' : '';
+
 $logoSrc = $isIpMemberPage ? '../../img/ip (1) 3.png' : '../img/ip (1) 3.png';
 $logoutHref = $isIpMemberPage ? '../logout.php' : 'logout.php';
-$lineageHref = 'ip_members.php';
-if ($isIpMember) {
-    $lineageHref = $isIpMemberPage ? 'family_lineage.php' : 'ip_member/family_lineage.php';
-}
 $tribeProfileHref = $isIpMemberPage ? '../tribe_information.php' : 'tribe_information.php';
 $profileHref = $isIpMemberPage ? '../profile.php' : 'profile.php';
+
+$dashboardHref = ($isAdmin || $currentRole === 'tribe_leader') ? $basePath . 'dashboard.php' : ($isIpMemberPage ? 'dashboard.php' : 'ip_member/dashboard.php');
+$userMgmtHref = $basePath . 'user_management.php';
+$lineageHref = ($isAdmin || $currentRole === 'tribe_leader') ? $basePath . 'ip_members.php' : ($isIpMemberPage ? 'family_lineage.php' : 'ip_member/family_lineage.php');
+$reportsHref = $basePath . 'reports.php';
+$settingsHref = $basePath . 'settings.php';
 
 $navClass = static function (string $key) use ($activeNav): string {
     if ($key === $activeNav) {
@@ -34,7 +39,7 @@ $navClass = static function (string $key) use ($activeNav): string {
     </div>
 
     <nav class="space-y-1">
-        <a href="dashboard.php" class="<?php echo $navClass('dashboard'); ?>">
+        <a href="<?php echo htmlspecialchars($dashboardHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('dashboard'); ?>">
             <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
             <span class="text-sm font-semibold">Dashboard</span>
         </a>
@@ -45,12 +50,12 @@ $navClass = static function (string $key) use ($activeNav): string {
         </a>
 
         <?php if ($isAdmin): ?>
-        <a href="user_management.php" class="<?php echo $navClass('user_management'); ?>">
+        <a href="<?php echo htmlspecialchars($userMgmtHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('user_management'); ?>">
             <i data-lucide="user-cog" class="w-5 h-5"></i>
             <span class="text-sm font-medium">User Management</span>
         </a>
 
-        <a href="ip_members.php" class="<?php echo $navClass('ip_members'); ?>">
+        <a href="<?php echo htmlspecialchars($lineageHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('ip_members'); ?>">
             <i data-lucide="users" class="w-5 h-5"></i>
             <span class="text-sm font-medium">IP Members</span>
         </a>
@@ -69,7 +74,7 @@ $navClass = static function (string $key) use ($activeNav): string {
         </a>
 
         <?php if ($isAdmin || $currentRole === 'tribe_leader'): ?>
-        <a href="reports.php" class="<?php echo $navClass('reports'); ?>">
+        <a href="<?php echo htmlspecialchars($reportsHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('reports'); ?>">
             <i data-lucide="layers" class="w-5 h-5"></i>
             <span class="text-sm">Reports</span>
         </a>
@@ -77,7 +82,7 @@ $navClass = static function (string $key) use ($activeNav): string {
 
         <div class="pt-10 pb-2 px-3 text-[10px] uppercase tracking-widest text-gray-400 font-bold">System</div>
 
-        <a href="settings.php" class="<?php echo $navClass('settings'); ?>">
+        <a href="<?php echo htmlspecialchars($settingsHref, ENT_QUOTES, 'UTF-8'); ?>" class="<?php echo $navClass('settings'); ?>">
             <i data-lucide="settings" class="w-5 h-5"></i>
             <span class="text-sm font-medium">Settings</span>
         </a>
