@@ -152,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $updateUserRoleStmt->close();
 
             $_SESSION['success_message'] = "Application approved. User has been granted IP Member status.";
-        } elseif ($action === 'reject' && ($isTribeLeader || $isAdmin) && ($application['status'] === 'pending_elder' || $application['status'] === 'pending_admin')) {
+        } elseif ($action === 'reject' && ($isElder || $isAdmin) && ($application['status'] === 'pending_elder' || $application['status'] === 'pending_admin')) {
             $rejectionRemarks = trim((string)($_POST['rejection_remarks'] ?? ''));
             if ($rejectionRemarks === '') {
                 throw new Exception("Rejection remarks are required.");
