@@ -3,7 +3,7 @@
 $db_host = 'localhost';
 $db_username = 'root';
 $db_password = '';
-$db_name = 'iplineage_system';
+$db_name = 'ankan_lineage_system';
 
 // Create connection with error suppression removed for debugging
 $conn = @new mysqli($db_host, $db_username, $db_password, $db_name);

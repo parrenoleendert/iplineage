@@ -14,6 +14,11 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 <?php
 $ipmembers = [];
 $errorMessage = '';
+
+$searchQuery = isset($_GET['query']) ? trim((string) $_GET['query']) : '';
+$selectedTribe = isset($_GET['tribe']) ? trim((string) $_GET['tribe']) : '';
+$selectedBarangay = isset($_GET['barangay']) ? trim((string) $_GET['barangay']) : '';
+
 $perPage = 5;
 $currentPage = isset($_GET['page']) ? (int) $_GET['page'] : 1;
 if ($currentPage < 1) {
@@ -68,37 +73,126 @@ if ($columnResult instanceof mysqli_result) {
     }
 }
 
-$memberIdColumn = first_existing_column($columns, ['member_id']);
+// Also check joined tables as some information might be in ip_member_details or applications
+// Also check joined tables as some information might be in ip_member_details or applications
+$detailColumns = [];
+$resDetails = $conn->query("SHOW COLUMNS FROM ip_member_details");
+if ($resDetails) { while($c = $resDetails->fetch_assoc()) $detailColumns[] = $c['Field']; }
+
+$appColumns = [];
+$resApp = $conn->query("SHOW COLUMNS FROM applications");
+if ($resApp instanceof mysqli_result) { while($c = $resApp->fetch_assoc()) $appColumns[] = $c['Field']; }
+
+$appStatusColumn = first_existing_column($appColumns, ['approval_status', 'status']) ?? 'status';
+
+$memberIdColumn = first_existing_column($columns, ['member_id', 'ip_member_id']);
+$displayIdCol = first_existing_column($columns, ['display_id', 'member_id']);
 $ipMemberIdColumn = first_existing_column($columns, ['ip_member_id', 'id']);
-$tribeColumn = first_existing_column($columns, ['tribe_clan']);
+
+$tribeColumn = first_existing_column($columns, ['tribe_clan', 'tribe']);
+$tribeSource = (in_array($tribeColumn, $columns, true)) ? 'i' : 'd';
+if ($tribeColumn === null) {
+    $tribeColumn = first_existing_column($detailColumns, ['tribe', 'tribe_id', 'tribe_clan']);
+    $tribeSource = 'd';
+}
+
 $barangayColumn = first_existing_column($columns, ['barangay']);
-$registrationColumn = first_existing_column($columns, ['registration_date']);
+$barangaySource = (in_array($barangayColumn, $columns, true)) ? 'i' : 'd';
+if ($barangayColumn === null) {
+    $barangayColumn = first_existing_column($detailColumns, ['barangay']);
+    $barangaySource = 'd';
+}
+
+$registrationColumn = first_existing_column($columns, ['registration_date', 'created_at']);
+$regSource = (in_array($registrationColumn, $columns, true)) ? 'i' : 'a';
+if ($registrationColumn === null) {
+    $registrationColumn = first_existing_column($appColumns, ['application_date', 'created_at', 'registration_date']) ?? 'application_date';
+    $regSource = 'a';
+}
+
 $firstNameColumn = first_existing_column($columns, ['first_name']);
 $middleNameColumn = first_existing_column($columns, ['middle_name']);
 $lastNameColumn = first_existing_column($columns, ['last_name']);
+
 $birthdateColumn = first_existing_column($columns, ['birthdate', 'date_of_birth']);
+$birthSource = (in_array($birthdateColumn, $columns, true)) ? 'i' : 'd';
+if ($birthdateColumn === null) {
+    $birthdateColumn = first_existing_column($detailColumns, ['date_of_birth', 'birthdate']);
+    $birthSource = 'd';
+}
+
 $placeOfBirthColumn = first_existing_column($columns, ['place_of_birth', 'birth_place']);
-$currentAddressColumn = first_existing_column($columns, ['current_address', 'address']);
-$contactInformationColumn = first_existing_column($columns, ['contact_information', 'contact_number', 'contact_no', 'phone_number']);
+$pobSource = (in_array($placeOfBirthColumn, $columns, true)) ? 'i' : 'd';
+if ($placeOfBirthColumn === null) {
+    $placeOfBirthColumn = first_existing_column($detailColumns, ['place_of_birth', 'birth_place']);
+    $pobSource = 'd';
+}
+
+$currentAddressColumn = first_existing_column($columns, ['current_address', 'address', 'specific_current_address']);
+$addressSource = (in_array($currentAddressColumn, $columns, true)) ? 'i' : 'd';
+if ($currentAddressColumn === null) {
+    $currentAddressColumn = first_existing_column($detailColumns, ['specific_current_address', 'current_address', 'address']);
+    $addressSource = 'd';
+}
+
+$contactInformationColumn = first_existing_column($columns, ['contact_information', 'contact_number', 'contact_no', 'phone_number', 'mobile_number']);
+$contactSource = (in_array($contactInformationColumn, $columns, true)) ? 'i' : 'd';
+if ($contactInformationColumn === null) {
+    $contactInformationColumn = first_existing_column($detailColumns, ['mobile_number', 'contact_information', 'phone_number']);
+    $contactSource = 'd';
+}
 
 $nameExpression = "'N/A'";
 if (in_array('member_name', $columns, true)) {
-    $nameExpression = 'member_name';
+    $nameExpression = 'i.member_name';
+} elseif (in_array('full_name', $columns, true)) {
+    $nameExpression = 'i.full_name';
 } elseif (in_array('first_name', $columns, true) || in_array('last_name', $columns, true)) {
-    $firstNameExpr = in_array('first_name', $columns, true) ? 'first_name' : "''";
-    $middleNameExpr = in_array('middle_name', $columns, true) ? 'middle_name' : "''";
-    $lastNameExpr = in_array('last_name', $columns, true) ? 'last_name' : "''";
+    $firstNameExpr = in_array('first_name', $columns, true) ? 'i.first_name' : "''";
+    $middleNameExpr = in_array('middle_name', $columns, true) ? 'i.middle_name' : "''";
+    $lastNameExpr = in_array('last_name', $columns, true) ? 'i.last_name' : "''";
     $nameExpression = "TRIM(CONCAT_WS(' ', {$firstNameExpr}, {$middleNameExpr}, {$lastNameExpr}))";
 }
 
+/**
+ * Build Dynamic Search/Filter WHERE clause
+ * We only want to show members who have been APPROVED.
+ */
+$whereClauses = ["a.`{$appStatusColumn}` = 'approved'"];
+$params = [];
+$types = '';
+
+if ($searchQuery !== '') {
+    $whereClauses[] = "(i.{$memberIdColumn} LIKE ? OR {$nameExpression} LIKE ? OR t.tribe_name LIKE ? OR {$barangaySource}.{$barangayColumn} LIKE ?)";
+    $searchParam = '%' . $searchQuery . '%';
+    array_push($params, $searchParam, $searchParam, $searchParam, $searchParam);
+    $types .= 'ssss';
+}
+
+if ($selectedTribe !== '' && $selectedTribe !== 'All Tribes') {
+    $whereClauses[] = "t.tribe_name = ?"; $params[] = $selectedTribe; $types .= 's';
+}
+
+if ($selectedBarangay !== '' && $selectedBarangay !== 'All Barangays') {
+    $whereClauses[] = "{$barangaySource}.{$barangayColumn} = ?"; $params[] = $selectedBarangay; $types .= 's';
+}
+
+$whereClauseSql = " WHERE " . implode(' AND ', $whereClauses);
+
 if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === null || $registrationColumn === null) {
-    $errorMessage = 'Missing required columns in ipmembers table (member_id, tribe_clan, barangay, registration_date).';
+    $errorMessage = 'Missing required columns in system tables (member_id, tribe_clan, barangay, registration_date).';
 } else {
-    $countSql = "SELECT COUNT(*) AS total FROM ipmembers";
-    $countResult = $conn->query($countSql);
+    $countSql = "SELECT COUNT(*) AS total FROM ipmembers i JOIN applications a ON i.ip_member_id = a.ip_member_id LEFT JOIN ip_member_details d ON i.ip_member_id = d.ip_member_id LEFT JOIN tribes t ON {$tribeSource}.{$tribeColumn} = t.tribe_id" . $whereClauseSql;
+    $countStmt = $conn->prepare($countSql);
+    if ($countStmt) {
+        if (!empty($params)) $countStmt->bind_param($types, ...$params);
+        $countStmt->execute();
+        $countResult = $countStmt->get_result();
     if ($countResult instanceof mysqli_result) {
         $countRow = $countResult->fetch_assoc();
         $totalRecords = (int) ($countRow['total'] ?? 0);
+    }
+        $countStmt->close();
     }
 
     $totalPages = max(1, (int) ceil($totalRecords / $perPage));
@@ -108,22 +202,27 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
 
     $offset = ($currentPage - 1) * $perPage;
 
-    $sexExpression = in_array('sex', $columns, true) ? 'i.sex' : "''";
+    $rawSexSource = in_array('sex', $columns, true) ? 'i.sex' : "d.sex";
+    $sexExpression = "CASE 
+        WHEN LOWER(TRIM($rawSexSource)) IN ('m', 'male') THEN 'Male' 
+        WHEN LOWER(TRIM($rawSexSource)) IN ('f', 'female') THEN 'Female' 
+        ELSE 'N/A' END";
+
     $ipMemberIdExpression = $ipMemberIdColumn !== null ? "i.{$ipMemberIdColumn}" : "i.{$memberIdColumn}";
     $firstNameExpression = $firstNameColumn !== null ? "i.{$firstNameColumn}" : "''";
     $middleNameExpression = $middleNameColumn !== null ? "i.{$middleNameColumn}" : "''";
     $lastNameExpression = $lastNameColumn !== null ? "i.{$lastNameColumn}" : "''";
-    $birthdateExpression = $birthdateColumn !== null ? "i.{$birthdateColumn}" : "''";
-    $placeOfBirthExpression = $placeOfBirthColumn !== null ? "i.{$placeOfBirthColumn}" : "''";
-    $currentAddressExpression = $currentAddressColumn !== null ? "i.{$currentAddressColumn}" : "''";
-    $contactInformationExpression = $contactInformationColumn !== null ? "i.{$contactInformationColumn}" : "''";
+    $birthdateExpression = $birthdateColumn !== null ? "{$birthSource}.{$birthdateColumn}" : "''";
+    $placeOfBirthExpression = $placeOfBirthColumn !== null ? "{$pobSource}.{$placeOfBirthColumn}" : "''";
+    $currentAddressExpression = $currentAddressColumn !== null ? "{$addressSource}.{$currentAddressColumn}" : "''";
+    $contactInformationExpression = $contactInformationColumn !== null ? "{$contactSource}.{$contactInformationColumn}" : "''";
 
     $sql = "SELECT {$nameExpression} AS member_name,
                    {$ipMemberIdExpression} AS ip_member_id,
-                   i.{$memberIdColumn} AS member_id,
-                   COALESCE(t.tribe_name, CAST(i.{$tribeColumn} AS CHAR)) AS tribe_clan,
-                   i.{$barangayColumn} AS barangay,
-                   i.{$registrationColumn} AS registration_date,
+                   " . ($displayIdCol ? "i.`$displayIdCol`" : "NULL") . " AS member_id,
+                   COALESCE(t.tribe_name, CAST({$tribeSource}.{$tribeColumn} AS CHAR)) AS tribe_clan,
+                   {$barangaySource}.{$barangayColumn} AS barangay,
+                   {$regSource}.{$registrationColumn} AS registration_date,
                    {$firstNameExpression} AS first_name,
                    {$middleNameExpression} AS middle_name,
                    {$lastNameExpression} AS last_name,
@@ -133,15 +232,25 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
                    {$contactInformationExpression} AS contact_information,
                    {$sexExpression} AS sex
             FROM ipmembers i
-            LEFT JOIN tribes t ON i.{$tribeColumn} = t.tribe_id
-                 ORDER BY i.{$registrationColumn} DESC
-                 LIMIT {$perPage} OFFSET {$offset}";
-    $result = $conn->query($sql);
+            INNER JOIN applications a ON i.ip_member_id = a.ip_member_id
+            LEFT JOIN ip_member_details d ON i.ip_member_id = d.ip_member_id
+            LEFT JOIN tribes t ON {$tribeSource}.{$tribeColumn} = t.tribe_id
+                 " . $whereClauseSql . "
+                 ORDER BY {$regSource}.{$registrationColumn} DESC, i.ip_member_id DESC
+                 LIMIT ? OFFSET ?";
 
-    if ($result instanceof mysqli_result) {
-        while ($row = $result->fetch_assoc()) {
-            $ipmembers[] = $row;
+    $stmt = $conn->prepare($sql);
+    if ($stmt) {
+        $queryParams = array_merge($params, [$perPage, $offset]);
+        $stmt->bind_param($types . 'ii', ...$queryParams);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($result instanceof mysqli_result) {
+            while ($row = $result->fetch_assoc()) {
+                $ipmembers[] = $row;
+            }
         }
+        $stmt->close();
     } else {
         $errorMessage = 'Unable to load member records: ' . $conn->error;
     }
@@ -182,26 +291,27 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
         <?php endif; ?>
 
         <div class="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
-            <div class="relative w-full md:w-96">
+            <form action="total_members.php" method="get" class="relative w-full md:w-96">
                 <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"></i>
-                <input type="text" placeholder="Search by ID, name, or tribe..." 
+                <input type="text" name="query" value="<?php echo htmlspecialchars($searchQuery, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Search by ID, name, or tribe..." 
                     class="w-full bg-white border border-[#dedede] rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-sm shadow-sm">
-            </div>
+            </form>
 
             <div class="flex items-center gap-3 ml-auto">
                 <div class="relative min-w-[160px]">
-                    <select class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-xs font-bold uppercase text-gray-500 outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer shadow-sm">
-                        <option>All Tribes</option>
-                        <option>Iraynon-Bukidnon</option>
+                    <select onchange="window.location.href='total_members.php?query=<?php echo urlencode($searchQuery); ?>&barangay=<?php echo urlencode($selectedBarangay); ?>&tribe=' + encodeURIComponent(this.value)" class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-xs font-bold uppercase text-gray-500 outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer shadow-sm">
+                        <option value="">All Tribes</option>
+                        <option value="Iraynon-Bukidnon" <?php echo $selectedTribe === 'Iraynon-Bukidnon' ? 'selected' : ''; ?>>Iraynon-Bukidnon</option>
+                        <option value="Ati Tribe" <?php echo $selectedTribe === 'Ati Tribe' ? 'selected' : ''; ?>>Ati Tribe</option>
                     </select>
                     <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                         <i data-lucide="chevron-down" class="w-4 h-4"></i>
                     </div>
                 </div>
                 <div class="relative min-w-[160px]">
-                    <select class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-xs font-bold uppercase text-gray-500 outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer shadow-sm">
-                        <option>All Barangays</option>
-                        <option>Villafont</option>
+                    <select onchange="window.location.href='total_members.php?query=<?php echo urlencode($searchQuery); ?>&tribe=<?php echo urlencode($selectedTribe); ?>&barangay=' + encodeURIComponent(this.value)" class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-xs font-bold uppercase text-gray-500 outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer shadow-sm">
+                        <option value="">All Barangays</option>
+                        <option value="Villafont" <?php echo $selectedBarangay === 'Villafont' ? 'selected' : ''; ?>>Villafont</option>
                     </select>
                     <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                         <i data-lucide="chevron-down" class="w-4 h-4"></i>
@@ -227,8 +337,9 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
                             <?php
                                 $badgeClass = get_initial_badge_class((string) ($ipmember['sex'] ?? ''));
                                 $registrationLabel = 'N/A';
-                                if (!empty($ipmember['registration_date'])) {
-                                    $registrationLabel = date('M d, Y', strtotime((string) $ipmember['registration_date']));
+                                $regTimestamp = !empty($ipmember['registration_date']) ? strtotime((string)$ipmember['registration_date']) : false;
+                                if ($regTimestamp && $regTimestamp > 0) {
+                                    $registrationLabel = date('M d, Y', $regTimestamp);
                                 }
 
                                 $fullName = trim((string) ($ipmember['member_name'] ?? ''));
@@ -305,7 +416,7 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
                 <p class="text-[10px] font-bold text-gray-400 uppercase">Showing <?php echo count($ipmembers); ?> of <?php echo (int) $totalRecords; ?></p>
                 <div class="flex gap-2">
                     <?php if ($currentPage > 1): ?>
-                        <a href="?page=<?php echo $currentPage - 1; ?>" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-lg hover:bg-white transition">Previous</a>
+                        <a href="?page=<?php echo $currentPage - 1; ?>&query=<?php echo urlencode($searchQuery); ?>&tribe=<?php echo urlencode($selectedTribe); ?>&barangay=<?php echo urlencode($selectedBarangay); ?>" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-lg hover:bg-white transition">Previous</a>
                     <?php else: ?>
                         <span class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-lg text-gray-300 cursor-not-allowed">Previous</span>
                     <?php endif; ?>
@@ -313,7 +424,7 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
                     <span class="px-3 py-2 text-xs font-bold text-gray-500">Page <?php echo $currentPage; ?> of <?php echo $totalPages; ?></span>
 
                     <?php if ($currentPage < $totalPages): ?>
-                        <a href="?page=<?php echo $currentPage + 1; ?>" class="px-4 py-2 text-xs font-bold bg-[#262626] text-white rounded-lg hover:bg-[#404040] transition">Next</a>
+                        <a href="?page=<?php echo $currentPage + 1; ?>&query=<?php echo urlencode($searchQuery); ?>&tribe=<?php echo urlencode($selectedTribe); ?>&barangay=<?php echo urlencode($selectedBarangay); ?>" class="px-4 py-2 text-xs font-bold bg-[#262626] text-white rounded-lg hover:bg-[#404040] transition">Next</a>
                     <?php else: ?>
                         <span class="px-4 py-2 text-xs font-bold bg-[#262626]/30 text-white rounded-lg cursor-not-allowed">Next</span>
                     <?php endif; ?>
@@ -361,18 +472,10 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
                     <!-- Core Identity Block -->
                     <div>
                         <h4 class="mb-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">Core Identity</h4>
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div class="grid grid-cols-1 gap-4">
                             <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
-                                <span class="block text-[11px] font-medium text-gray-400 uppercase">First Name</span>
-                                <span id="floatingFirstName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
-                            </div>
-                            <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
-                                <span class="block text-[11px] font-medium text-gray-400 uppercase">Middle Name</span>
-                                <span id="floatingMiddleName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
-                            </div>
-                            <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
-                                <span class="block text-[11px] font-medium text-gray-400 uppercase">Last Name</span>
-                                <span id="floatingLastName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
+                                <span class="block text-[11px] font-medium text-gray-400 uppercase">Full Name</span>
+                                <span id="floatingCoreFullName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
                             </div>
                         </div>
                     </div>
@@ -385,6 +488,10 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
                             <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
                                 <span class="text-xs font-medium text-gray-500">Birthdate</span>
                                 <span id="floatingBirthdate" class="text-xs font-bold text-[#262626]">-</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
+                                <span class="text-xs font-medium text-gray-500">Sex / Gender</span>
+                                <span id="floatingSexText" class="text-xs font-bold text-[#262626]">-</span>
                             </div>
                             <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
                                 <span class="text-xs font-medium text-gray-500">Place of Birth</span>
@@ -488,9 +595,7 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
         if (memberTableBody && floatingMemberCard) {
             const floatingInitials = document.getElementById('floatingInitials');
             const floatingFullName = document.getElementById('floatingFullName');
-            const floatingFirstName = document.getElementById('floatingFirstName');
-            const floatingMiddleName = document.getElementById('floatingMiddleName');
-            const floatingLastName = document.getElementById('floatingLastName');
+            const floatingCoreFullName = document.getElementById('floatingCoreFullName');
             const floatingBirthdate = document.getElementById('floatingBirthdate');
             const floatingPlaceOfBirth = document.getElementById('floatingPlaceOfBirth');
             const floatingCurrentAddress = document.getElementById('floatingCurrentAddress');
@@ -516,15 +621,17 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
 
                 floatingInitials.textContent = getInitials(fullName);
                 floatingFullName.textContent = fullName;
-                floatingFirstName.textContent = row.dataset.firstName || 'N/A';
-                floatingMiddleName.textContent = row.dataset.middleName || 'N/A';
-                floatingLastName.textContent = row.dataset.lastName || 'N/A';
+                if (floatingCoreFullName) floatingCoreFullName.textContent = fullName;
                 floatingBirthdate.textContent = row.dataset.birthdate || 'N/A';
                 floatingPlaceOfBirth.textContent = row.dataset.placeOfBirth || 'N/A';
                 floatingCurrentAddress.textContent = row.dataset.currentAddress || 'N/A';
                 floatingContactInformation.textContent = row.dataset.contactInformation || 'N/A';
                 floatingMemberId.textContent = memberId;
                 floatingTribeClan.textContent = row.dataset.tribeClan || 'N/A';
+
+                const rawSex = (row.dataset.sex || '').toLowerCase();
+                const displaySex = (rawSex === 'm' || rawSex === 'male') ? 'Male' : ((rawSex === 'f' || rawSex === 'female') ? 'Female' : 'N/A');
+                document.getElementById('floatingSexText').textContent = displaySex;
                 
                 // Apply sex-based coloring
                 const sex = (row.dataset.sex || '').toLowerCase();
@@ -540,7 +647,7 @@ if ($memberIdColumn === null || $tribeColumn === null || $barangayColumn === nul
 
                 if (floatingFamilyTreeLink) {
                     if (treeMemberId && treeMemberId !== 'N/A') {
-                        floatingFamilyTreeLink.href = 'family_lineage.php?member_id=' + encodeURIComponent(treeMemberId);
+                        floatingFamilyTreeLink.href = 'verified_lineage.php?member_id=' + encodeURIComponent(treeMemberId);
                     } else {
                         floatingFamilyTreeLink.href = 'family_lineage.php';
                     }

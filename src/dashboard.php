@@ -3,21 +3,23 @@ require_once __DIR__ . '/auth/guards.php';
 require_once __DIR__ . '/auth/auth_helpers.php';
 require_any_role(['admin', 'tribe_leader']);
 
+// Extra protection: if an ip_member is not yet registered, redirect to personal.php.
+// This prevents using browser back navigation to access protected pages.
+if (isset($_SESSION['role']) && normalize_role((string)($_SESSION['role'] ?? '')) === 'ip_member') {
+    require_ip_registration_complete();
+}
+
+// Block unregistered ip_members from reaching dashboard routes via back button/navigation.
+// (dashboard.php itself is not accessible to ip_member, but keep consistent guard behavior)
+if (isset($_SESSION['role']) && normalize_role((string)($_SESSION['role'] ?? '')) === 'ip_member') {
+    require_ip_registration_complete();
+}
+
 require_once __DIR__ . '/dbconfig.php';
 $conn = $GLOBALS['conn'] ?? ($conn ?? null);
 if (!isset($conn) || !($conn instanceof mysqli)) {
     http_response_code(500);
     die('Database connection not established. Check src/dbconfig.php and MySQL service.');
-}
-
-function first_existing_column(array $columns, array $candidates): ?string {
-    foreach ($candidates as $candidate) {
-        if (in_array($candidate, $columns, true)) {
-            return $candidate;
-        }
-    }
-
-    return null;
 }
 
 $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
@@ -27,51 +29,72 @@ $dashboardOuterClass = 'ml-64 p-8';
 $dashboardInnerClass = '';
 
 $displayName = trim((string) ($_SESSION['name'] ?? 'User'));
-if ($displayName === '') {
-    $displayName = 'User';
-}
 
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
+// Safety Check: If session name is numeric (e.g. "2"), fetch real name from DB
+if (is_numeric($displayName) && isset($conn)) {
+    $userPk = (int)($_SESSION['user_id'] ?? 0);
+    $nameRes = $conn->query("SELECT COALESCE(NULLIF(full_name, ''), username, 'Admin User') as real_name FROM users WHERE userid = $userPk OR user_id = $userPk LIMIT 1");
+    if ($nameRes && $row = $nameRes->fetch_assoc()) {
+        $displayName = $row['real_name'];
+        $_SESSION['name'] = $displayName; // Update session for other pages
+    }
 }
+if ($displayName === '' || is_numeric($displayName)) $displayName = 'Admin User';
+
+$cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+$nameParts = preg_split('/\s+/', trim($cleanName));
+$firstNamePart = $nameParts[0] ?? '';
+$initials = ($firstNamePart !== '') ? strtoupper(substr($firstNamePart, 0, 1)) : 'A';
+$initials .= (count($nameParts) > 1 && end($nameParts) !== '') ? strtoupper(substr(end($nameParts), 0, 1)) : 'U';
+
 
 $roleLabel = 'IP Member';
 if ($currentRole === 'admin') {
     $roleLabel = 'System Admin';
 } elseif ($currentRole === 'tribe_leader') {
-    $roleLabel = 'Tribe Leader';
+    $roleLabel = 'Elder';
 }
+
+// Detect status column in applications to handle schema variations
+$appColumns = [];
+$resApp = $conn->query("SHOW COLUMNS FROM applications");
+if ($resApp instanceof mysqli_result) { while($c = $resApp->fetch_assoc()) $appColumns[] = $c['Field']; }
+$appStatusColumn = (in_array('approval_status', $appColumns, true)) ? 'approval_status' : 'status';
+
+$ipColumns = [];
+$resIp = $conn->query("SHOW COLUMNS FROM ipmembers");
+if ($resIp instanceof mysqli_result) { while($c = $resIp->fetch_assoc()) $ipColumns[] = $c['Field']; }
+$ipNameCol = (in_array('full_name', $ipColumns, true)) ? 'full_name' : 'member_name';
+
+// Calculate Total Population directly from approved applications to ensure accuracy regardless of tribe grouping
+$totalPopulation = 0;
+$popSql = "SELECT COUNT(*) as total FROM applications WHERE `{$appStatusColumn}` = 'approved'";
+$popRes = mysqli_query($conn, $popSql);
+if ($popRes) { $totalPopulation = (int)(mysqli_fetch_assoc($popRes)['total'] ?? 0); }
 
 $sql = "SELECT 
     t.tribe_name,
     t.language,
-    COUNT(i.member_id) AS population,
+    COUNT(a.ip_member_id) AS population,
     t.location
 FROM tribes t
 LEFT JOIN ipmembers i ON t.tribe_id = i.tribe_clan
+LEFT JOIN applications a ON i.ip_member_id = a.ip_member_id AND a.{$appStatusColumn} = 'approved'
 GROUP BY t.tribe_id";
 
 $population_result = mysqli_query($conn, $sql);
+$pendingElderCount = 0;
+$pendingAdminCount = 0;
 
-$pendingveri = [];
-$pendingveri_sql = "SELECT * FROM applications WHERE status = 'pending'";
-$pendingveri_result = mysqli_query($conn, $pendingveri_sql);
-if ($pendingveri_result && mysqli_num_rows($pendingveri_result) > 0) {
-    while ($row = mysqli_fetch_assoc($pendingveri_result)) {
-        $pendingveri[] = $row;
-    }
-}
+$pendingElderQuery = "SELECT COUNT(*) as total FROM applications WHERE {$appStatusColumn} = 'pending_elder'";
+$resElder = mysqli_query($conn, $pendingElderQuery);
+if ($resElder) { $pendingElderCount = (int)(mysqli_fetch_assoc($resElder)['total'] ?? 0); }
 
-$pendingapprovalscount = [];
-$pendingapprovalscount_sql = "SELECT * FROM pending_approvals WHERE approval_status = 'pending_approval'";
-$pendingapprovalscount_result = mysqli_query($conn, $pendingapprovalscount_sql);
-if ($pendingapprovalscount_result && mysqli_num_rows($pendingapprovalscount_result) > 0) {
-    while ($row = mysqli_fetch_assoc($pendingapprovalscount_result)) {
-        $pendingapprovalscount[] = $row;
-    }
-}
+$pendingAdminQuery = "SELECT COUNT(*) as total FROM applications WHERE {$appStatusColumn} = 'pending_admin'";
+$resAdmin = mysqli_query($conn, $pendingAdminQuery);
+if ($resAdmin) { $pendingAdminCount = (int)(mysqli_fetch_assoc($resAdmin)['total'] ?? 0); }
+
+$totalPendingProfiles = $pendingElderCount + $pendingAdminCount;
 
 $tribes = [];
 $tribe_sql = "SELECT * FROM tribes";
@@ -82,33 +105,23 @@ if ($tribe_result && mysqli_num_rows($tribe_result) > 0) {
     }
 }
 
-$pendingApprovalColumns = [];
-$pendingApprovalColumnsResult = mysqli_query($conn, "SHOW COLUMNS FROM pending_approvals");
-if ($pendingApprovalColumnsResult) {
-    while ($columnRow = mysqli_fetch_assoc($pendingApprovalColumnsResult)) {
-        $pendingApprovalColumns[] = strtolower((string) ($columnRow['Field'] ?? ''));
-    }
-}
-
-$approvalIdColumn = first_existing_column($pendingApprovalColumns, ['id', 'pending_approval_id', 'approval_id']);
-$remarksColumn = first_existing_column($pendingApprovalColumns, ['rejected_remarks', 'rejection_remarks', 'remarks', 'rejection_reason', 'reason', 'comment', 'comments']);
-
 // --- PAGINATION FOR REJECTED HISTORY ---
 $limit = 4; // Number of rows per page
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset = ($page - 1) * $limit;
 
 // Get total count for calculating total pages
-$totalRowsSql = "SELECT COUNT(*) AS total FROM pending_approvals WHERE approval_status = 'rejected'";
+$totalRowsSql = "SELECT COUNT(*) AS total FROM applications WHERE {$appStatusColumn} = 'rejected'";
 $totalRowsResult = mysqli_query($conn, $totalRowsSql);
 $totalRows = mysqli_fetch_assoc($totalRowsResult)['total'] ?? 0;
 $totalPages = ceil($totalRows / $limit);
 
 $approvalHistory = [];
-$approvalHistorySql = "SELECT " . ($approvalIdColumn !== null ? "{$approvalIdColumn} AS approval_id, " : "0 AS approval_id, ") . "applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date, approval_status" . ($remarksColumn !== null ? ", {$remarksColumn} AS remarks_text" : ", '' AS remarks_text") . "
-FROM pending_approvals
-WHERE approval_status = 'rejected'
-ORDER BY activity_date DESC
+$approvalHistorySql = "SELECT a.application_id, i.full_name AS applicant_name, a.application_date AS activity_date, a.{$appStatusColumn} AS approval_status, a.rejection_remarks AS remarks_text
+FROM applications a
+JOIN ipmembers i ON a.ip_member_id = i.ip_member_id
+WHERE a.{$appStatusColumn} = 'rejected'
+ORDER BY a.application_date DESC
 LIMIT $limit OFFSET $offset";
 
 $approvalHistoryResult = mysqli_query($conn, $approvalHistorySql);
@@ -123,38 +136,25 @@ if ($approvalHistoryResult && mysqli_num_rows($approvalHistoryResult) > 0) {
 $chartLabels = [];
 $chartValues = [];
 
-for ($i = 5; $i >= 0; $i--) {
-    $chartLabels[] = date('M', strtotime("-{$i} months"));
-    $chartValues[] = 0;
+// For the chart, we need to count all applications (pending, approved, rejected)
+// that were created in the last 6 months.
+$applicationsDateColumn = 'application_date'; // This column is guaranteed to exist in the applications table
+
+for ($i = 5; $i >= 0; $i--) { // Last 6 months including current
+    $chartLabels[] = date('M Y', strtotime("-{$i} months"));
+    $chartValues[] = 0; // Initialize counts for each month
 }
 
-$applicationsDateColumn = null;
-$applicationsColumnsResult = mysqli_query($conn, "SHOW COLUMNS FROM applications");
-if ($applicationsColumnsResult) {
-    $availableColumns = [];
-    while ($columnRow = mysqli_fetch_assoc($applicationsColumnsResult)) {
-        $availableColumns[] = strtolower((string) ($columnRow['Field'] ?? ''));
-    }
-
-    $dateColumnCandidates = ['submitted_at', 'application_date', 'created_at', 'date_submitted', 'verification_date'];
-    foreach ($dateColumnCandidates as $candidate) {
-        if (in_array($candidate, $availableColumns, true)) {
-            $applicationsDateColumn = $candidate;
-            break;
-        }
-    }
-}
-
-if ($applicationsDateColumn !== null) {
+if ($applicationsDateColumn) {
     $monthMap = [];
     for ($i = 5; $i >= 0; $i--) {
         $monthKey = date('Y-m', strtotime("-{$i} months"));
-        $monthMap[$monthKey] = count($monthMap);
+        $monthMap[$monthKey] = 5 - $i; // Correctly map month key to array index 0-5
     }
 
     $trendSql = "SELECT DATE_FORMAT(`{$applicationsDateColumn}`, '%Y-%m') AS month_key, COUNT(*) AS total
     FROM applications
-    WHERE `{$applicationsDateColumn}` >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+    WHERE `{$applicationsDateColumn}` >= DATE_SUB(CURDATE(), INTERVAL 5 MONTH)
     GROUP BY DATE_FORMAT(`{$applicationsDateColumn}`, '%Y-%m')";
     $trendResult = mysqli_query($conn, $trendSql);
 
@@ -234,14 +234,14 @@ if ($applicationsDateColumn !== null) {
                     <span class="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-md">+12.5%</span>
                 </div>
                 <p class="text-gray-500 text-xs font-semibold uppercase tracking-wider"><?php echo $isAdmin ? 'Total Members' : 'Tribe Population'; ?></p>
-                <h3 class="text-2xl font-bold text-[#262626]"><?php echo htmlspecialchars($population_result && mysqli_num_rows($population_result) > 0 ? mysqli_fetch_assoc($population_result)['population'] : 0); ?></h3>
+                <h3 class="text-2xl font-bold text-[#262626]"><?php echo $totalPopulation; ?></h3>
             </a>
 
-            <a href="<?php echo $isAdmin ? 'active_tribe.php' : 'tribe_leader/active_tribe.html'; ?>" class="bg-card-custom p-6 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
+            <a href="<?php echo $isAdmin ? 'active_tribe.php' : 'pending_lineage.php'; ?>" class="bg-card-custom p-6 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md hover:border-gray-300">
                 <div class="flex justify-between items-start mb-4">
                     <div class="p-2 bg-[#262626]/5 rounded-lg text-[#262626]"><i data-lucide="map" class="w-5 h-5"></i></div>
                 </div>
-                <p class="text-gray-500 text-xs font-semibold uppercase tracking-wider"><?php echo $isAdmin ? 'Active Tribes' : 'Active Members'; ?></p>
+                <p class="text-gray-500 text-xs font-semibold uppercase tracking-wider"><?php echo $isAdmin ? 'Active Tribes' : 'Pending Lineage'; ?></p>
                 <h3 class="text-2xl font-bold text-[#262626]"><?php echo count($tribes); ?></h3>
             </a>
 
@@ -250,7 +250,7 @@ if ($applicationsDateColumn !== null) {
                     <div class="p-2 bg-[#262626]/5 rounded-lg text-[#262626]"><i data-lucide="shield-check" class="w-5 h-5"></i></div>
                 </div>
                 <p class="text-gray-500 text-xs font-semibold uppercase tracking-wider">Pending Verification</p>
-                <h3 class="text-2xl font-bold text-[#262626]"><?php echo count($pendingveri); ?></h3>
+                <h3 class="text-2xl font-bold text-[#262626]"><?php echo $pendingElderCount; ?></h3>
             </a>
 
             <?php if ($isAdmin): ?>
@@ -258,8 +258,8 @@ if ($applicationsDateColumn !== null) {
                 <div class="flex justify-between items-start mb-4">
                     <div class="p-2 bg-[#262626]/5 rounded-lg text-[#262626]"><i data-lucide="clock" class="w-5 h-5"></i></div>
                 </div>
-                <p class="text-gray-500 text-xs font-semibold uppercase tracking-wider">Pending Approval</p>
-                <h3 class="text-2xl font-bold text-[#262626]"><?php echo count($pendingapprovalscount); ?></h3>
+                <p class="text-gray-500 text-xs font-semibold uppercase tracking-wider">Pending Admin Approval</p>
+                <h3 class="text-2xl font-bold text-[#262626]"><?php echo $pendingAdminCount; ?></h3>
             </a>
             <?php endif; ?>
         </div>
@@ -282,8 +282,9 @@ if ($applicationsDateColumn !== null) {
                 <div class="space-y-5">
                     <?php
                         // Filter directly from database or reuse global values safely
-                        $recentApprovedSql = "SELECT applicant_name, COALESCE(approve_reject_date, verification_date) AS activity_date 
-                                              FROM pending_approvals WHERE approval_status = 'approved' ORDER BY activity_date DESC LIMIT 4";
+                        $recentApprovedSql = "SELECT i.{$ipNameCol} AS applicant_name, a.application_date AS activity_date
+                                              FROM applications a
+                                              JOIN ipmembers i ON a.ip_member_id = i.ip_member_id WHERE a.`{$appStatusColumn}` = 'approved' ORDER BY a.application_date DESC LIMIT 4";
                         $recentApprovedResult = mysqli_query($conn, $recentApprovedSql);
                         $hasRecentApproved = $recentApprovedResult && mysqli_num_rows($recentApprovedResult) > 0;
                     ?>
@@ -330,32 +331,41 @@ if ($applicationsDateColumn !== null) {
             </div>
             <div class="relative">
 
-            <aside id="floatingMemberCard" class="hidden fixed inset-0 z-[60] items-center justify-center p-4 sm:p-6">
-                <div id="floatingMemberBackdrop" class="absolute inset-0 bg-black/40"></div>
-                <div class="relative z-10 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-[0_0_20px_rgba(0,0,0,0.3)]">
-                <div class="mb-4 flex items-center justify-between">
-                    <h3 class="text-sm font-bold uppercase tracking-wider text-[#262626]">Rejection Remarks</h3>
-                    <button id="closeFloatingMemberCard" class="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-[#262626] transition">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                    </button>
-                </div>
-
-                <div class="mb-6 flex items-center gap-4 p-4">
-                    <div id="floatingInitials" class="h-24 w-24 flex-shrink-0 rounded-full bg-[#262626] text-white flex items-center justify-center">
-                        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            <!-- REFINED REJECTION REMARKS POPUP -->
+            <aside id="floatingMemberCard" class="hidden fixed inset-0 z-[110] items-center justify-center p-4">
+                <div id="floatingMemberBackdrop" class="absolute inset-0 bg-black/40 backdrop-blur-xs" onclick="hideFloatingMemberCard()"></div>
+                <div class="relative z-10 w-full max-w-lg bg-white rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.15)] border border-[#ececea] flex flex-col overflow-hidden">
+                    <div class="px-6 py-4 border-b border-[#ececea] flex items-center justify-between bg-gray-50/50">
+                        <div class="flex items-center gap-2">
+                            <span class="inline-block w-2 h-2 rounded-full bg-red-500"></span>
+                            <h3 class="text-[10px] font-bold uppercase tracking-wider text-gray-400">Application Rejection Details</h3>
+                        </div>
+                        <button onclick="hideFloatingMemberCard()" class="rounded-lg p-1 text-gray-400 hover:bg-gray-100 transition-all">
+                            <i data-lucide="x" class="w-4 h-4"></i>
+                        </button>
                     </div>
-                    <div>
-                        <p id="floatingFullName" class="text-lg font-bold text-[#262626]">No member selected</p>
-                        <p class="text-sm text-gray-500">examplemail@example.com</p>
+                    
+                    <div class="p-8">
+                        <div class="flex items-center gap-4 mb-8 pb-6 border-b border-gray-100">
+                            <div id="floatingInitials" class="h-14 w-14 rounded-xl bg-[#262626] text-white flex items-center justify-center font-bold text-lg shadow-sm uppercase">--</div>
+                            <div>
+                                <h2 id="floatingFullName" class="text-base font-bold text-[#262626] tracking-tight">No applicant selected</h2>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Rejected Status</p>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-red-50/50 border border-red-100 rounded-xl p-5">
+                            <p class="text-[10px] font-bold text-red-400 uppercase tracking-wider mb-2">Official Remarks</p>
+                            <p id="floatingRemarks" class="text-xs font-semibold text-red-700 leading-relaxed italic">No remarks available.</p>
+                        </div>
                     </div>
-                </div>
-                <div class="text-md font-bold text-[#262626] mb-2">
-                    Remarks:
-                </div>
-                <div id="floatingRemarks" class="text-sm text-gray-700">
-                    No remarks available for this record.
+                    
+                    <div class="px-6 py-4 bg-gray-50 border-t border-[#ececea] flex justify-end">
+                        <button onclick="hideFloatingMemberCard()" class="px-5 py-2 text-xs font-bold bg-[#262626] text-white rounded-xl hover:bg-black transition-all shadow-sm">Dismiss</button>
+                    </div>
                 </div>
             </aside>
+
             <table class="w-full text-left">
                 <thead>
                     <tr class="text-[10px] uppercase text-gray-400 border-line bg-gray-50/30">
@@ -373,7 +383,7 @@ if ($applicationsDateColumn !== null) {
                                 $status = strtolower(trim((string) ($historyRow['approval_status'] ?? '')));
                                 $verificationDateLabel = 'N/A';
 
-                                $timestamp = strtotime((string) ($historyRow['activity_date'] ?? ''));
+                                $timestamp = strtotime((string) ($historyRow['activity_date'] ?? $historyRow['application_date'] ?? ''));
                                 if ($timestamp !== false) {
                                     $verificationDateLabel = date('M d, Y', $timestamp);
                                 }
@@ -383,7 +393,7 @@ if ($applicationsDateColumn !== null) {
                                     ? 'bg-green-100 text-green-700 border border-green-200'
                                     : 'bg-red-100 text-red-700 border border-red-200';
                             ?>
-                            <tr class="member-row cursor-pointer hover:bg-gray-100 transition-colors duration-200" data-approval-id="<?php echo htmlspecialchars((string) ($historyRow['approval_id'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>" data-full-name="<?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?>">
+                            <tr class="member-row cursor-pointer hover:bg-gray-100 transition-colors duration-200" data-approval-id="<?php echo htmlspecialchars((string) ($historyRow['application_id'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>" data-full-name="<?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?>">
                                 <td class="px-6 py-4">
                                     <div class="font-semibold text-[#262626]"><?php echo htmlspecialchars($applicantName, ENT_QUOTES, 'UTF-8'); ?></div>
                                 </td>
@@ -395,11 +405,17 @@ if ($applicationsDateColumn !== null) {
                                 </td>
                                 <td class="px-6 py-4 text-right relative">
                                     <div class="inline-flex items-center gap-2">
-                                        <button type="button" class="p-2 hover:bg-gray-100 rounded-xl transition text-gray-400 hover:text-[#262626]" aria-label="More actions"><i data-lucide="more-horizontal" class="w-6 h-6"></i></button>
+                                        <button type="button" class="view-remarks-btn p-2 hover:bg-gray-100 rounded-xl transition text-gray-400 hover:text-[#262626]" aria-label="More actions"><i data-lucide="more-horizontal" class="w-6 h-6"></i></button>
                                     </div>
 
-                                    <div class="action-menu hidden absolute right-15 top-0 mt-2 w-40 bg-white border border-[#dedede] rounded-lg shadow-sm p-2 z-50">
-                                        <button type="button" class="font-bold w-full text-left px-2 py-2 rounded hover:bg-gray-50 menu-undo text-red-600 ">Undo</button>
+                                    <!-- REFINED ACTION MENU -->
+                                    <div class="action-menu hidden absolute right-0 top-1 mt-1 w-44 bg-white border border-[#ececea] rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.1)] p-1.5 z-[100]">
+                                        <button type="button" class="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 menu-view-remarks text-xs font-bold text-gray-700 flex items-center gap-2 transition-all">
+                                            <i data-lucide="eye" class="w-3.5 h-3.5 text-gray-400"></i> View Remarks
+                                        </button>
+                                        <button type="button" class="w-full text-left px-3 py-2 rounded-lg hover:bg-red-50 menu-undo text-xs font-bold text-red-600 flex items-center gap-2 transition-all mt-1">
+                                            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Undo Rejection
+                                        </button>
                                     </div>
                                 </td>
                                 
@@ -413,15 +429,19 @@ if ($applicationsDateColumn !== null) {
                 </tbody>
             </table>
 
-            <!-- Undo confirmation modal -->
-            <div id="confirmUndoModal" class="hidden fixed inset-0 z-[70] items-center justify-center p-4">
-                <div class="absolute inset-0 bg-black/40"></div>
-                <div class="relative z-10 w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-                    <h4 class="text-lg font-bold mb-2">Confirm Undo</h4>
-                    <p class="text-sm text-gray-600 mb-4">This will move the record back to pending and clear any rejection remarks. Continue?</p>
-                    <div class="flex justify-end gap-2">
-                        <button id="cancelUndoBtn" class="px-4 py-2 rounded-lg border border-[#dedede] bg-white">Cancel</button>
-                        <button id="confirmUndoBtn" class="px-4 py-2 rounded-lg bg-red-600 text-white">Confirm Undo</button>
+            <!-- REFINED UNDO CONFIRMATION MODAL -->
+            <div id="confirmUndoModal" class="hidden fixed inset-0 z-[120] items-center justify-center p-4">
+                <div class="absolute inset-0 bg-black/40 backdrop-blur-xs" onclick="closeUndoModal()"></div>
+                <div class="relative z-10 w-full max-w-md bg-white rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.15)] border border-[#ececea] p-6">
+                    <h3 class="text-base font-bold text-[#262626] mb-2 flex items-center gap-2">
+                        <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                        Undo Rejection
+                    </h3>
+                    <p class="text-xs text-gray-500 mb-6">Are you sure you want to revert the rejection for <span id="undoModalName" class="font-bold text-[#262626]">-</span>? The application will be moved back to <b>Pending Elder</b> status and the rejection reason will be deleted.</p>
+                    
+                    <div class="flex justify-end gap-3">
+                        <button id="cancelUndoBtn" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-xl hover:bg-gray-50 text-gray-600 transition-all">Cancel</button>
+                        <button id="confirmUndoBtn" class="px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-xl transition-all shadow-sm">Revert Rejection</button>
                     </div>
                 </div>
             </div>
@@ -461,6 +481,14 @@ if ($applicationsDateColumn !== null) {
         const hideFloatingMemberCard = () => {
             if (floatingMemberCard) {
                 floatingMemberCard.classList.add('hidden');
+                floatingMemberCard.classList.remove('flex');
+            }
+        };
+        
+        window.closeUndoModal = () => {
+            if (confirmUndoModal) {
+                confirmUndoModal.classList.add('hidden');
+                confirmUndoModal.classList.remove('flex');
             }
         };
 
@@ -478,7 +506,8 @@ if ($applicationsDateColumn !== null) {
         };
 
         document.querySelectorAll('.member-row').forEach((row) => {
-            row.addEventListener('click', () => {
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.view-remarks-btn') || e.target.closest('.action-menu')) return;
                 const approvalId = row.dataset.approvalId || '';
                 const applicantName = row.dataset.fullName || '';
 
@@ -511,23 +540,10 @@ if ($applicationsDateColumn !== null) {
 
         // Undo button handling
         let undoTargetApprovalId = null;
+        const undoModalName = document.getElementById('undoModalName');
         const confirmUndoModal = document.getElementById('confirmUndoModal');
         const cancelUndoBtn = document.getElementById('cancelUndoBtn');
         const confirmUndoBtn = document.getElementById('confirmUndoBtn');
-
-        document.querySelectorAll('.undo-btn').forEach((btn) => {
-            btn.addEventListener('click', (ev) => {
-                ev.stopPropagation();
-                undoTargetApprovalId = btn.dataset.approvalId || null;
-                if (confirmUndoModal) {
-                    confirmUndoModal.classList.remove('hidden');
-                    confirmUndoModal.classList.add('flex');
-                } else {
-                    if (!undoTargetApprovalId) return;
-                    doUndo(undoTargetApprovalId);
-                }
-            });
-        });
 
         if (cancelUndoBtn) {
             cancelUndoBtn.addEventListener('click', () => {
@@ -638,6 +654,11 @@ if ($applicationsDateColumn !== null) {
                 closeAllActionMenus();
                 if (!approvalId) return;
                 undoTargetApprovalId = approvalId;
+
+                const row = mBtn.closest('tr.member-row');
+                const applicantName = row ? (row.dataset.fullName || 'Applicant') : 'Applicant';
+                if (undoModalName) undoModalName.textContent = applicantName;
+
                 if (confirmUndoModal) {
                     confirmUndoModal.classList.remove('hidden');
                     confirmUndoModal.classList.add('flex');
@@ -693,6 +714,29 @@ if ($applicationsDateColumn !== null) {
                 }
             }
         });
+
+        // --- LIGHTWEIGHT REAL-TIME POLLING ---
+        function updateDashboardStats() {
+            fetch('backend/get_live_stats.php')
+                .then(response => response.json())
+                .then(data => {
+                    // Update the UI elements if they exist
+                    const elderEl = document.querySelector('[href="pending_verification.php"] h3');
+                    const adminEl = document.querySelector('[href="pending_approval.php"] h3');
+                    const popEl = document.querySelector('[href="total_members.php"] h3');
+                    
+                    if (elderEl) elderEl.textContent = data.pending_elder;
+                    if (adminEl) adminEl.textContent = data.pending_admin;
+                    if (popEl) popEl.textContent = data.total_population;
+                    
+                    // Optional: Notification if a new member is approved
+                    // compare data.latest_member with a local variable to trigger a toast
+                })
+                .catch(err => console.error('Polling error:', err));
+        }
+
+        // Poll every 30 seconds
+        setInterval(updateDashboardStats, 30000);
     </script>
 </body>
 </html>

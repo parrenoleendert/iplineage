@@ -9,6 +9,24 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
     die('Database connection not established. Check src/dbconfig.php and MySQL service.');
 }
 
+// --- Dynamic Column Detection for ipmembers ---
+$ipColumns = [];
+$resCols = $conn->query("SHOW COLUMNS FROM ipmembers");
+if ($resCols) { while($c = $resCols->fetch_assoc()) $ipColumns[] = $c['Field']; }
+
+// --- Dynamic Column Detection for ip_member_details ---
+$detailColumns = [];
+$resD = $conn->query("SHOW COLUMNS FROM ip_member_details");
+if ($resD) { while($c = $resD->fetch_assoc()) $detailColumns[] = $c['Field']; }
+
+$ipPkCol = first_existing_column($ipColumns, ['ip_member_id', 'id', 'member_id']) ?? 'ip_member_id';
+$tribeClanCol = first_existing_column($ipColumns, ['tribe_clan', 'tribe_id', 'tribe']);
+
+$popJoin = $tribeClanCol 
+    ? "LEFT JOIN ipmembers i ON t.tribe_id = i.`{$tribeClanCol}`" 
+    : "LEFT JOIN ip_member_details d ON t.tribe_id = d.`" . (first_existing_column($detailColumns, ['tribe', 'tribe_id', 'tribe_clan']) ?? 'tribe') . "` 
+       LEFT JOIN ipmembers i ON d.ip_member_id = i.`{$ipPkCol}`";
+
 $perPage = 5;
 $currentPage = isset($_GET['page']) ? (int) $_GET['page'] : 1;
 if ($currentPage < 1) {
@@ -32,12 +50,13 @@ if ($currentPage > $totalPages) {
 $offset = ($currentPage - 1) * $perPage;
 
 $sql = "SELECT 
+    t.tribe_id,
     t.tribe_name,
     t.language,
-    COUNT(i.member_id) AS population,
+    COUNT(i.`{$ipPkCol}`) AS population,
     t.location
 FROM tribes t
-LEFT JOIN ipmembers i ON t.tribe_id = i.tribe_clan
+{$popJoin}
 GROUP BY t.tribe_id
 ORDER BY t.tribe_name ASC
 LIMIT {$perPage} OFFSET {$offset}";
@@ -58,10 +77,10 @@ $result = mysqli_query($conn, $sql);
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <title>IP Lineage - Visual Tree</title>
     <style>
-        body { background-color: #f3f4f1; font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; }
+        body { background-color: #f3f4f1; font-family: 'Plus Jakarta Sans', sans-serif; }
     </style>
 </head>
-<body class="h-screen flex flex-col">
+<body class="min-h-screen flex flex-col">
     <header class="bg-white border-b border-[#dedede] p-4 flex justify-between items-center z-10">
         <div class="flex items-center gap-4">
             <a href="dashboard.php" class="p-2 hover:bg-gray-100 rounded-lg transition">
@@ -71,6 +90,7 @@ $result = mysqli_query($conn, $sql);
                 <h1 class="text-lg font-bold text-[#262626]">Active Tribes</h1>
             </div>
         </div>
+
     </header>
 
     <div class="p-4 md:p-10">
@@ -98,11 +118,11 @@ $result = mysqli_query($conn, $sql);
             <table class="w-full text-left">
                 <thead>
                     <tr class="text-[10px] uppercase text-gray-400 bg-gray-50/50 border-b border-[#dedede]">
-                        <th class="px-6 py-4 font-bold">Tribe Name</th>
-                        <th class="px-6 py-4 font-bold">Language</th>
-                        <th class="px-6 py-4 font-bold">Population</th>
-                        <th class="px-6 py-4 font-bold">Location</th>
-                        <th class="px-6 py-4 font-bold text-right">Action</th>
+                        <th class="w-[10%] px-6 py-4 font-bold text-left">Tribe Name</th>
+                        <th class="w-[20%] px-4 py-4 font-bold text-center">Language</th>
+                        <th class="w-[25%] px-4 py-4 font-bold text-center">Population</th>
+                        <th class="w-[20%] px-6 py-4 font-bold text-left">Location</th>
+                        <th class="w-[20%] px-6 py-4 font-bold text-right">Action</th>
                     </tr>
                 </thead>
                 <tbody class="text-sm divide-y divide-[#dedede]">
@@ -116,16 +136,22 @@ $result = mysqli_query($conn, $sql);
                                         </div>
                                     </div>
                                 </td>
-                                <td class="px-6 py-4 font-medium text-gray-600 text-xs"><?php echo htmlspecialchars($row['language'] ?? 'N/A'); ?></td>
-                                <td class="px-5 py-4 font-semibold text-[#262626] text-xs"><?php echo htmlspecialchars($row['population'] ?? 0); ?> Members</td>
-                                <td class="px-6 py-4 font-medium text-gray-600 text-xs"><?php echo htmlspecialchars($row['location'] ?? 'N/A'); ?></td>
+                                <td class="px-4 py-4 font-medium text-gray-600 text-xs text-center"><?php echo htmlspecialchars($row['language'] ?? 'N/A'); ?></td>
+                                <td class="px-4 py-4 font-semibold text-[#262626] text-xs text-center"><?php echo htmlspecialchars($row['population'] ?? 0); ?> Members</td>
+                                <td class="px-6 py-4 font-medium text-gray-500 text-xs leading-relaxed"><?php echo htmlspecialchars($row['location'] ?? 'N/A'); ?></td>
                                 <td class="px-6 py-4 text-right">
-                                    <button title="Edit Connections" class="p-2 hover:bg-gray-100 text-gray-400 rounded-lg transition">
-                                        <i data-lucide="edit-3" class="w-4 h-4"></i>
-                                    </button>
-                                    <button class="p-2 hover:bg-gray-100 rounded-lg transition">
-                                        <i data-lucide="more-vertical" class="w-4 h-4 text-gray-400"></i>
-                                    </button>
+                                    <div class="relative inline-block text-left">
+                                        <button type="button" class="action-menu-toggle p-2 hover:bg-gray-100 rounded-lg transition text-gray-400">
+                                            <i data-lucide="more-horizontal" class="w-4 h-4"></i>
+                                        </button>
+                                        <div class="action-menu hidden absolute right-0 mt-1 w-44 bg-white border border-[#dedede] rounded-xl shadow-lg z-50 p-1.5">
+                                            <a href="tribe_information.php?tribe_id=<?php echo (int)$row['tribe_id']; ?>" 
+                                               class="w-full text-left px-3 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 rounded-md flex items-center gap-2 transition">
+                                                <i data-lucide="eye" class="w-3.5 h-3.5 text-gray-400"></i> 
+                                                View Tribe Info
+                                            </a>
+                                        </div>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endwhile; ?>
@@ -160,13 +186,24 @@ $result = mysqli_query($conn, $sql);
 
     <script>
         lucide.createIcons();
-        function showDetails(name) {
-            document.getElementById('panelName').innerText = name;
-            document.getElementById('sidePanel').classList.remove('translate-x-full');
-        }
-        function hideDetails() {
-            document.getElementById('sidePanel').classList.add('translate-x-full');
-        }
+
+        // Action Menu Logic
+        document.addEventListener('click', (e) => {
+            const toggle = e.target.closest('.action-menu-toggle');
+            const menu = e.target.closest('.action-menu');
+            
+            if (toggle) {
+                const targetMenu = toggle.nextElementSibling;
+                // Close all other open menus
+                document.querySelectorAll('.action-menu').forEach(m => {
+                    if (m !== targetMenu) m.classList.add('hidden');
+                });
+                targetMenu.classList.toggle('hidden');
+            } else if (!menu) {
+                // Clicked outside, close all menus
+                document.querySelectorAll('.action-menu').forEach(m => m.classList.add('hidden'));
+            }
+        });
     </script>
 </body>
 </html>

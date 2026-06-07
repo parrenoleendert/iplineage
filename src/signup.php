@@ -1,3 +1,166 @@
+<?php
+// signup.php
+require_once __DIR__ . '/dbconfig.php';
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    http_response_code(500);
+    die('Database connection not established. Check src/dbconfig.php and MySQL service.');
+}
+
+$sql = "SELECT * FROM users";
+$result = mysqli_query($conn, $sql);
+
+$signupError = '';
+$signupSuccess = '';
+$firstName = '';
+$lastName = '';
+$email = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $firstName = mb_convert_case(trim((string) ($_POST['first_name'] ?? '')), MB_CASE_TITLE, "UTF-8");
+    $lastName = mb_convert_case(trim((string) ($_POST['last_name'] ?? '')), MB_CASE_TITLE, "UTF-8");
+    $email = trim((string) ($_POST['email'] ?? ''));
+    $password = (string) ($_POST['password'] ?? '');
+    $confirmPassword = (string) ($_POST['confirm_password'] ?? '');
+
+    if ($firstName === '' || $lastName === '' || $email === '' || $password === '' || $confirmPassword === '') {
+        $signupError = 'All fields are required.';
+    } elseif ($password !== $confirmPassword) {
+        $signupError = 'Passwords do not match.';
+    } elseif (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        $signupError = 'Please enter a valid email address.';
+    } elseif (strlen($password) < 8) {
+        $signupError = 'Password must be at least 8 characters long.';
+    } else {
+
+        $columns = [];
+        $columnResult = $conn->query('SHOW COLUMNS FROM users');
+        if ($columnResult instanceof mysqli_result) {
+            while ($column = $columnResult->fetch_assoc()) {
+                $columns[] = (string) ($column['Field'] ?? '');
+            }
+        }
+
+        $hasColumn = static function (string $candidate) use ($columns): bool {
+            return in_array($candidate, $columns, true);
+        };
+
+        $emailColumn = $hasColumn('email') ? 'email' : null;
+        $passwordColumn = $hasColumn('password_hash') ? 'password_hash' : ($hasColumn('password') ? 'password' : null);
+        $firstNameColumn = $hasColumn('first_name') ? 'first_name' : ($hasColumn('firstname') ? 'firstname' : null);
+        $lastNameColumn = $hasColumn('last_name') ? 'last_name' : ($hasColumn('lastname') ? 'lastname' : null);
+        $jurisdictionColumn = $hasColumn('jurisdiction') ? 'jurisdiction' : ($hasColumn('juresdiction') ? 'juresdiction' : null);
+
+        if ($emailColumn === null || $passwordColumn === null || $firstNameColumn === null || $lastNameColumn === null) {
+            $signupError = 'Signup is not properly configured. Missing email/password/name columns in users table.';
+        } else {
+            // Check if email already exists using a prepared statement
+            $checkSql = "SELECT 1 FROM users WHERE `{$emailColumn}` = ? LIMIT 1";
+            $checkStmt = $conn->prepare($checkSql);
+            if ($checkStmt) {
+                $checkStmt->bind_param('s', $email);
+                $checkStmt->execute();
+                $checkResult = $checkStmt->get_result();
+                $exists = $checkResult instanceof mysqli_result ? $checkResult->fetch_assoc() : null;
+                $checkStmt->close();
+
+                if ($exists) {
+                    $signupError = 'An account with this email already exists.';
+                } else {
+                    // Prepare dynamic insert statement
+                    $insertCols = [];
+                    $placeholders = [];
+                    $types = '';
+                    $params = [];
+
+                    // Add email
+                    $insertCols[] = "`{$emailColumn}`";
+                    $placeholders[] = '?';
+                    $types .= 's';
+                    $params[] = $email;
+
+                    // Add password (hashed)
+                    $insertCols[] = "`{$passwordColumn}`";
+                    $placeholders[] = '?';
+                    $types .= 's';
+                    $params[] = password_hash($password, PASSWORD_DEFAULT);
+
+                    // Add first name if column exists
+                    if ($firstNameColumn !== null) {
+                        $insertCols[] = "`{$firstNameColumn}`";
+                        $placeholders[] = '?';
+                        $types .= 's';
+                        $params[] = $firstName;
+                    }
+
+                    // Add last name if column exists
+                    if ($lastNameColumn !== null) {
+                        $insertCols[] = "`{$lastNameColumn}`";
+                        $placeholders[] = '?';
+                        $types .= 's';
+                        $params[] = $lastName;
+                    }
+
+                    // Add default avatar if column exists (matches your schema default path)
+                    if ($hasColumn('avatar')) {
+                        $insertCols[] = "`avatar`";
+                        $placeholders[] = '?';
+                        $types .= 's';
+                        $params[] = '/avatars/default.png';
+                    }
+
+                    // Add default role if column exists
+                    if ($hasColumn('role')) {
+                        $insertCols[] = "`role`";
+                        $placeholders[] = '?';
+                        $types .= 's';
+                        $params[] = 'IP MEMBER';
+                    }
+                    if ($jurisdictionColumn !== null) {
+                        $insertCols[] = "`{$jurisdictionColumn}`";
+                        $placeholders[] = '?';
+                        $types .= 's';
+                        $params[] = 'Personal Data Only';
+                    }
+
+                    // Add status if column exists (enum('Online','Offline') in your schema)
+                    if ($hasColumn('status')) {
+                        $insertCols[] = "`status`";
+                        $placeholders[] = '?';
+                        $types .= 's';
+                        $params[] = 'Offline';
+                    }
+
+
+                    // Construct SQL
+                    $insertSql = "INSERT INTO users (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $placeholders) . ")";
+                    $insertStmt = $conn->prepare($insertSql);
+
+                    if ($insertStmt) {
+                        $insertStmt->bind_param($types, ...$params);
+                        if ($insertStmt->execute()) {
+                            $signupSuccess = 'Account created successfully! You can now log in.';
+                            // Clear form values
+                            $firstName = '';
+                            $lastName = '';
+                            $email = '';
+                        } else {
+                            // Show the real MySQL error while debugging
+                            $signupError = 'Failed to create your account. ' . htmlspecialchars($insertStmt->error, ENT_QUOTES, 'UTF-8');
+                        }
+                        $insertStmt->close();
+                    } else {
+                        $signupError = 'An error occurred while preparing your registration. Please try again.';
+                    }
+                }
+            } else {
+                $signupError = 'Unable to process signup request right now.';
+            }
+        }
+    }
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,30 +202,55 @@
                     Already have an account? <a href="login.php" class="text-[#262626] font-bold hover:underline transition">Log in</a>
                 </p>
 
-                <form class="space-y-5">
+                <?php if ($signupError !== ''): ?>
+                    <div class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded-xl flex items-start gap-3">
+                        <i class="fa-solid fa-circle-exclamation text-red-500 mt-0.5"></i>
+                        <p class="text-sm text-red-700 font-medium"><?php echo htmlspecialchars($signupError, ENT_QUOTES, 'UTF-8'); ?></p>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($signupSuccess !== ''): ?>
+                    <div class="bg-green-50 border-l-4 border-green-500 p-4 mb-6 rounded-xl flex items-start gap-3">
+                        <i class="fa-solid fa-circle-check text-green-500 mt-0.5"></i>
+                        <p class="text-sm text-green-700 font-medium"><?php echo htmlspecialchars($signupSuccess, ENT_QUOTES, 'UTF-8'); ?></p>
+                    </div>
+                <?php endif; ?>
+
+                <form method="POST" action="signup.php" class="space-y-5">
                     <div class="grid grid-cols-2 gap-4">
                         <div class="space-y-2">
                             <label class="text-sm font-semibold text-[#262626]">First Name</label>
-                            <input type="text" placeholder="Juan" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
+                            <input type="text" name="first_name" placeholder="Juan" value="<?php echo htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
                         </div>
                         <div class="space-y-2">
                             <label class="text-sm font-semibold text-[#262626]">Last Name</label>
-                            <input type="text" placeholder="Dela Cruz" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
+                            <input type="text" name="last_name" placeholder="Dela Cruz" value="<?php echo htmlspecialchars($lastName, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
                         </div>
                     </div>
 
                     <div class="space-y-2">
                         <label class="text-sm font-semibold text-[#262626]">Email Address</label>
-                        <input type="email" placeholder="username@example.com" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
+                        <input type="email" name="email" placeholder="username@example.com" value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
                     </div>
 
                     <div class="space-y-2">
                         <label class="text-sm font-semibold text-[#262626]">Password</label>
                         <div class="relative">
-                            <input id="passwordInput" type="password" placeholder="••••••••" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 pr-12 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
+                            <input id="passwordInput" type="password" name="password" placeholder="••••••••" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 pr-12 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
                             
                             <button type="button" id="togglePassword" class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#262626] transition">
                                 <i class="fa-solid fa-eye" id="eyeIcon"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-sm font-semibold text-[#262626]">Confirm Password</label>
+                        <div class="relative">
+                            <input id="confirmPasswordInput" type="password" name="confirm_password" placeholder="••••••••" class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-3.5 pr-12 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
+                            
+                            <button type="button" id="toggleConfirmPassword" class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#262626] transition">
+                                <i class="fa-solid fa-eye" id="confirmEyeIcon"></i>
                             </button>
                         </div>
                     </div>
@@ -108,18 +296,24 @@
 
     <script>
         const passwordInput = document.getElementById('passwordInput');
+        const confirmPasswordInput = document.getElementById('confirmPasswordInput');
         const toggleBtn = document.getElementById('togglePassword');
+        const toggleConfirmBtn = document.getElementById('toggleConfirmPassword');
         const eyeIcon = document.getElementById('eyeIcon');
+        const confirmEyeIcon = document.getElementById('confirmEyeIcon');
 
-        toggleBtn.addEventListener('click', function() {
-            // Toggle the type attribute
-            const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
-            passwordInput.setAttribute('type', type);
-            
-            // Toggle the eye / eye-slash icon
-            eyeIcon.classList.toggle('fa-eye');
-            eyeIcon.classList.toggle('fa-eye-slash');
-        });
+        function setupToggle(input, btn, icon) {
+            if (!input || !btn || !icon) return;
+            btn.addEventListener('click', function() {
+                const type = input.getAttribute('type') === 'password' ? 'text' : 'password';
+                input.setAttribute('type', type);
+                icon.classList.toggle('fa-eye');
+                icon.classList.toggle('fa-eye-slash');
+            });
+        }
+
+        setupToggle(passwordInput, toggleBtn, eyeIcon);
+        setupToggle(confirmPasswordInput, toggleConfirmBtn, confirmEyeIcon);
     </script>
 
 </body>

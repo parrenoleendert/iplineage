@@ -72,7 +72,7 @@ if ($conn->connect_error) {
 echo "Step 4: Checking required tables\n";
 echo "-------------------------------------------\n";
 
-$required_tables = ['users', 'ipmembers', 'tribes', 'applications', 'pending_approvals', 'relationships'];
+$required_tables = ['users', 'ipmembers', 'tribes', 'applications', 'relationships']; // Removed pending_approvals
 $existing_tables = [];
 $missing_tables = [];
 

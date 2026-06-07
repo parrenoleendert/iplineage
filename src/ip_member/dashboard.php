@@ -14,18 +14,7 @@ require_once __DIR__ . '/../auth/guards.php';
 require_once __DIR__ . '/../auth/auth_helpers.php';
 require_any_role(['ip_member']);
 
-$displayName = trim((string) ($_SESSION['name'] ?? 'User'));
-if ($displayName === '') {
-    $displayName = 'User';
-}
-
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
-}
-
-$roleLabel = 'IP Member';
+list($displayName, $initials, $roleLabel) = get_header_profile_data($_SESSION);
 
 $profileName = $displayName;
 $profileSex = 'N/A';
@@ -39,35 +28,59 @@ $tribeTraditions = 'No traditions and rituals data available.';
 $tribeArtsCrafts = 'No arts and crafts data available.';
 
 $userId = (int) ($_SESSION['user_id'] ?? 0);
-$memberSql = "SELECT i.ip_member_id, i.tribe_clan, i.first_name, i.middle_name, i.last_name, i.birthdate, i.sex, t.tribe_name
+
+touch_user_activity($userId);
+
+// Detect user table primary key for robust joining
+$userCols = [];
+$uRes = $conn->query("SHOW COLUMNS FROM users");
+while($c = $uRes->fetch_assoc()) $userCols[] = $c['Field'];
+$uPk = first_existing_column($userCols, ['userid', 'user_id', 'id']) ?? 'user_id';
+
+$profileEmail = 'N/A';
+$profileContactNum = 'N/A';
+$profileAddress = 'N/A';
+$uploadedDocuments = [];
+$memberPrimaryId = 0;
+$memberRow = null;
+$memberTribeId = 0;
+
+$memberSql = "SELECT i.ip_member_id, i.full_name, d.sex, d.date_of_birth as birthdate, d.tribe as tribe_clan, t.tribe_name, u.email, d.mobile_number, d.barangay, d.specific_current_address
               FROM ipmembers i
-              LEFT JOIN tribes t ON i.tribe_clan = t.tribe_id
-              WHERE i.user_id = ? OR TRIM(CONCAT_WS(' ', i.first_name, i.middle_name, i.last_name)) = ?
-              ORDER BY (i.user_id = ?) DESC
+              LEFT JOIN users u ON i.user_id = u.{$uPk}
+              LEFT JOIN ip_member_details d ON i.ip_member_id = d.ip_member_id
+              LEFT JOIN tribes t ON d.tribe = t.tribe_id
+              WHERE i.user_id = ?
               LIMIT 1";
 $memberStmt = $conn->prepare($memberSql);
 if ($memberStmt) {
-    $memberStmt->bind_param('isi', $userId, $displayName, $userId);
+    $memberStmt->bind_param('i', $userId);
     $memberStmt->execute();
     $memberResult = $memberStmt->get_result();
     $memberRow = $memberResult instanceof mysqli_result ? $memberResult->fetch_assoc() : null;
     $memberStmt->close();
 
     if ($memberRow) {
-        $namePartsForProfile = [
-            trim((string) ($memberRow['first_name'] ?? '')),
-            trim((string) ($memberRow['middle_name'] ?? '')),
-            trim((string) ($memberRow['last_name'] ?? '')),
-        ];
-        $combinedProfileName = trim(implode(' ', array_filter($namePartsForProfile, static function ($value) {
-            return $value !== '';
-        })));
-        if ($combinedProfileName !== '') {
-            $profileName = $combinedProfileName;
+        if (!empty($memberRow['full_name'])) {
+            $profileName = $memberRow['full_name'];
         }
 
-        $profileSex = (string) ($memberRow['sex'] ?? 'N/A');
+        $rawSex = strtolower(trim((string) ($memberRow['sex'] ?? '')));
+        if ($rawSex === 'm' || $rawSex === 'male') $profileSex = 'Male';
+        elseif ($rawSex === 'f' || $rawSex === 'female') $profileSex = 'Female';
+        else $profileSex = 'N/A';
+
         $profileTribe = (string) ($memberRow['tribe_name'] ?? 'N/A');
+        
+        // Try DB email first, fallback to session email
+        $profileEmail = (string) ($memberRow['email'] ?? ($_SESSION['email'] ?? 'N/A'));
+        
+        $profileContactNum = (string) ($memberRow['mobile_number'] ?? 'N/A');
+        
+        $brgy = trim((string)($memberRow['barangay'] ?? ''));
+        $addr = trim((string)($memberRow['specific_current_address'] ?? ''));
+        $combinedAddr = trim(implode(', ', array_filter([$addr, $brgy])));
+        $profileAddress = ($combinedAddr !== '') ? $combinedAddr : 'N/A';
 
         $birthdateValue = (string) ($memberRow['birthdate'] ?? '');
         if ($birthdateValue !== '') {
@@ -128,37 +141,47 @@ if ($memberStmt) {
                 $relationshipStmt->close();
             }
         }
+        
+        // Fetch uploaded documents for this specific member
+            $docSql = "SELECT document_type, file_name FROM ip_member_documents WHERE ip_member_id = ?";
+            $docStmt = $conn->prepare($docSql);
+            if ($docStmt) {
+                $docStmt->bind_param('i', $memberPrimaryId);
+                $docStmt->execute();
+                $docRes = $docStmt->get_result();
+                while ($d = $docRes->fetch_assoc()) {
+                    $uploadedDocuments[] = $d;
+                }
+                $docStmt->close();
+            }
     }
 }
 
-$leadershipSql = "SELECT official_name, designation, term FROM leadership_structure ORDER BY id ASC LIMIT 3";
-$leadershipResult = mysqli_query($conn, $leadershipSql);
-if ($leadershipResult instanceof mysqli_result) {
-    while ($leadershipRow = mysqli_fetch_assoc($leadershipResult)) {
-        $leadershipRows[] = $leadershipRow;
-    }
-}
-
-$leadershipFallbackRows = [
-    ['official_name' => 'Datu Ramon Salonga', 'designation' => 'Tribal Chieftain', 'term' => '2025 - 2028'],
-    ['official_name' => 'Lita M. Dumalag', 'designation' => 'Elder Council Head', 'term' => '2025 - 2028'],
-    ['official_name' => 'Jomar Dela Cruz', 'designation' => 'Youth Representative', 'term' => '2025 - 2028'],
-];
-
-$leadershipDisplayRows = $leadershipRows;
-if (count($leadershipDisplayRows) < 3) {
-    foreach ($leadershipFallbackRows as $fallbackRow) {
-        if (count($leadershipDisplayRows) >= 3) {
-            break;
+// Resolve Leadership Structure based on the member's tribe
+$memberTribeId = $memberTribeId > 0 ? $memberTribeId : (int) (($memberRow['tribe_clan'] ?? 0));
+if ($memberTribeId > 0) {
+    $leadershipSql = "SELECT official_name, designation, term
+                       FROM leadership_structure
+                       WHERE tribe_id = ?
+                       ORDER BY leadership_id ASC
+                       LIMIT 3";
+    $leadershipStmt = $conn->prepare($leadershipSql);
+    if ($leadershipStmt) {
+        $leadershipStmt->bind_param('i', $memberTribeId);
+        $leadershipStmt->execute();
+        $leadershipResult = $leadershipStmt->get_result();
+        while ($leadershipRow = $leadershipResult->fetch_assoc()) {
+            $leadershipRows[] = $leadershipRow;
         }
-        $leadershipDisplayRows[] = $fallbackRow;
+        $leadershipStmt->close();
     }
 }
 
-if (count($leadershipDisplayRows) > 3) {
-    $leadershipDisplayRows = array_slice($leadershipDisplayRows, 0, 3);
-}
+// IMPORTANT: remove hardcoded fallback rows. If DB has no data, UI will show the empty state.
+$leadershipDisplayRows = $leadershipRows;
+
 ?>
+
 
 <!DOCTYPE html>
 <html lang="en">
@@ -264,7 +287,7 @@ if (count($leadershipDisplayRows) > 3) {
                             <div class="min-w-0">
                                 <h3 class="text-xl font-bold text-[#262626] tracking-tight truncate"><?php echo htmlspecialchars($profileName, ENT_QUOTES, 'UTF-8'); ?></h3>
                                 <p class="text-sm text-gray-500 font-semibold mt-1 tracking-wide">
-                                    <?php echo htmlspecialchars(($profileRole ?? 'IP Member'), ENT_QUOTES, 'UTF-8'); ?>
+                                    <?php echo htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8'); ?>
                                 </p>
                             </div>
                         </div>
@@ -284,15 +307,15 @@ if (count($leadershipDisplayRows) > 3) {
                             </div>
                             <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
                                 <span class="text-gray-400 font-medium">Email Address</span>
-                                <span class="text-[#262626] font-semibold truncate max-w-[180px]"><?php echo htmlspecialchars(($profileEmail ?? 'leendert.parreno@gmail.com'), ENT_QUOTES, 'UTF-8'); ?></span>
+                                <span class="text-[#262626] font-semibold truncate max-w-[180px]"><?php echo htmlspecialchars($profileEmail, ENT_QUOTES, 'UTF-8'); ?></span>
                             </div>
                             <div class="flex justify-between items-center border-b border-dashed border-[#ececea] pb-2.5">
                                 <span class="text-gray-400 font-medium">Contact Number</span>
-                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars(($profileContactNum ?? '+63 912 123 4567'), ENT_QUOTES, 'UTF-8'); ?></span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileContactNum, ENT_QUOTES, 'UTF-8'); ?></span>
                             </div>
                             <div class="flex justify-between items-center pb-1">
                                 <span class="text-gray-400 font-medium">Address</span>
-                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars(($profileAddress ?? 'Hamtic, Antique'), ENT_QUOTES, 'UTF-8'); ?></span>
+                                <span class="text-[#262626] font-semibold"><?php echo htmlspecialchars($profileAddress, ENT_QUOTES, 'UTF-8'); ?></span>
                             </div>
                         </div>
                     </div>
@@ -388,29 +411,20 @@ if (count($leadershipDisplayRows) > 3) {
                             <i data-lucide="folder-open" class="w-4 h-4 text-gray-300"></i>
                         </div>
 
-                        <div class="space-y-2.5">
-                            <!-- Document 1: PSA Birth Certificate -->
-                            <div class="flex items-center justify-between gap-4 p-2.5 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 border border-[#ececea] transition">
-                                <span class="text-sm font-semibold text-[#262626] truncate">PSA Birth Certificate</span>
-                                <a href="#" class="inline-flex items-center gap-1.5 bg-[#262626] text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-[#404040] transition shrink-0">
-                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Download
-                                </a>
-                            </div>
-
-                            <!-- Document 2: NCIP Genealogy Form -->
-                            <div class="flex items-center justify-between gap-4 p-2.5 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 border border-[#ececea] transition">
-                                <span class="text-sm font-semibold text-[#262626] truncate">NCIP Genealogy Form</span>
-                                <a href="#" class="inline-flex items-center gap-1.5 bg-[#262626] text-white px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-[#404040] transition shrink-0">
-                                    <i data-lucide="download" class="w-3.5 h-3.5"></i> Download
-                                </a>
-                            </div>
+                        <div class="space-y-1.5 max-h-[150px] overflow-y-auto pr-1 custom-scrollbar">
+                            <?php if (!empty($uploadedDocuments)): ?>
+                                <?php foreach ($uploadedDocuments as $doc): ?>
+                                    <div class="flex items-center justify-between gap-4 p-2 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 border border-[#ececea] transition">
+                                        <span class="text-xs font-bold text-[#262626] truncate" title="<?php echo htmlspecialchars($doc['document_type'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($doc['document_type'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                        <a href="../uploads/<?php echo (int)$userId; ?>/<?php echo htmlspecialchars($doc['file_name'], ENT_QUOTES, 'UTF-8'); ?>" target="_blank" class="inline-flex items-center gap-1.5 bg-[#262626] text-white px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-[#404040] transition shrink-0">
+                                            <i data-lucide="download" class="w-3.5 h-3.5"></i> Download
+                                        </a>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <p class="text-xs text-gray-400 italic text-center py-4">No documents uploaded yet.</p>
+                            <?php endif; ?>
                         </div>
-                    </div>
-                    
-                    <div class="pt-3 flex items-center justify-between border-t border-[#ececea] mt-4">
-                        <a href="#" class="w-full text-center py-2 px-3 border border-[#262626] text-[#262626] rounded-xl text-xs font-bold hover:bg-gray-50 transition">
-                            View All Documents
-                        </a>
                     </div>
                 </div>
             </div>

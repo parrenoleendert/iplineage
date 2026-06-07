@@ -18,6 +18,9 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 $searchQuery = isset($_GET['query']) ? trim($_GET['query']) : '';
+$selectedTribe = isset($_GET['tribe']) ? trim($_GET['tribe']) : '';
+$selectedBarangay = isset($_GET['barangay']) ? trim($_GET['barangay']) : '';
+
 $perPage = 5;
 $currentPage = isset($_GET['page']) ? (int) $_GET['page'] : 1;
 if ($currentPage < 1) {
@@ -26,17 +29,112 @@ if ($currentPage < 1) {
 $totalRecords = 0;
 $totalPages = 1;
 
+$errorMessage = '';
+$successMessage = $_SESSION['success_message'] ?? '';
+unset($_SESSION['success_message']);
+
 $ipmembers = [];
-$error_message = '';
+
+// --- Handle Account Disabling Logic ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['target_user_id'])) {
+    $targetUserId = (int)$_POST['target_user_id'];
+    $action = $_POST['action'];
+
+    if ($action === 'toggle_status' && $targetUserId > 0) {
+        // Dynamic column detection for the update
+        $userCols = [];
+        $res = $conn->query("SHOW COLUMNS FROM users");
+        while($c = $res->fetch_assoc()) $userCols[] = $c['Field'];
+        
+        $statusCol = first_existing_column($userCols, ['account_status', 'status', 'user_status', 'is_active']);
+        $pkCol = first_existing_column($userCols, ['userid', 'user_id', 'id']);
+
+        if ($statusCol && $pkCol) {
+            $currentStatus = $_POST['current_status'] ?? '';
+            $newStatus = (strtolower(trim($currentStatus)) === 'disabled') ? 'Offline' : 'Disabled';
+            
+            $updateStmt = $conn->prepare("UPDATE users SET `{$statusCol}` = ? WHERE `{$pkCol}` = ? LIMIT 1");
+            if ($updateStmt) {
+                $updateStmt->bind_param('si', $newStatus, $targetUserId);
+                if ($updateStmt->execute()) {
+                    $_SESSION['success_message'] = "Associated user account " . ($newStatus === 'Disabled' ? 'disabled' : 'enabled') . " successfully.";
+                    header("Location: ip_members.php?query=" . urlencode($searchQuery) . "&page=" . $currentPage);
+                    exit;
+                }
+                $updateStmt->close();
+            }
+        }
+    }
+}
+
+// --- Dynamic Column Detection for ipmembers ---
+$ipColumns = [];
+$res = $conn->query("SHOW COLUMNS FROM ipmembers");
+if ($res) { while($c = $res->fetch_assoc()) $ipColumns[] = $c['Field']; }
+
+// --- Detect status column in applications ---
+$appColumns = [];
+$resApp = $conn->query("SHOW COLUMNS FROM applications");
+if ($resApp instanceof mysqli_result) { while($c = $resApp->fetch_assoc()) $appColumns[] = $c['Field']; }
+$appStatusCol = (in_array('approval_status', $appColumns, true)) ? 'approval_status' : 'status';
+
+// --- Dynamic Column Detection for ip_member_details ---
+$detailColumns = [];
+$resD = $conn->query("SHOW COLUMNS FROM ip_member_details");
+if ($resD) { while($c = $resD->fetch_assoc()) $detailColumns[] = $c['Field']; }
+
+// --- Dynamic Column Detection for users ---
+$userColsForSex = [];
+$resU = $conn->query("SHOW COLUMNS FROM users");
+if ($resU) { while($c = $resU->fetch_assoc()) $userColsForSex[] = $c['Field']; }
+
+$ipPkCol = first_existing_column($ipColumns, ['ip_member_id', 'id']) ?? 'ip_member_id';
+$userPkColForJoin = first_existing_column($userColsForSex, ['userid', 'user_id', 'id']) ?? 'userid';
+$ipNameCol = first_existing_column($ipColumns, ['full_name', 'name', 'member_name']);
+if ($ipNameCol) {
+    $ipNameExpr = "i.`{$ipNameCol}`";
+} elseif (in_array('first_name', $ipColumns) && in_array('last_name', $ipColumns)) {
+    $ipNameExpr = "TRIM(CONCAT_WS(' ', i.first_name, i.middle_name, i.last_name))";
+} else {
+    $ipNameExpr = "'Unknown Member'";
+}
+
+$regDateExpr = ($c = first_existing_column($ipColumns, ['registration_date', 'created_at', 'date_registered'])) ? "i.`$c`" : "a.application_date";
+$dobExpr = ($c = first_existing_column($ipColumns, ['birthdate', 'date_of_birth'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['birthdate', 'date_of_birth'])) ? "d.`$c`" : "NULL");
+$pobExpr = ($c = first_existing_column($ipColumns, ['place_of_birth', 'birth_place'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['place_of_birth', 'birth_place'])) ? "d.`$c`" : "NULL");
+$addrExpr = ($c = first_existing_column($ipColumns, ['current_address', 'address'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['current_address', 'address', 'specific_current_address'])) ? "d.`$c`" : "NULL");
+$contactExpr = ($c = first_existing_column($ipColumns, ['contact_information', 'phone_number', 'mobile'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['contact_information', 'phone_number', 'mobile', 'mobile_number'])) ? "d.`$c`" : "NULL");
+$memberIdStrExpr = ($c = first_existing_column($ipColumns, ['display_id', 'member_id'])) ? "i.`$c`" : "NULL";
+
+$rawSexSource = ($c = first_existing_column($ipColumns, ['sex', 'gender'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['sex', 'gender'])) ? "d.`$c`" : (($c = first_existing_column($userColsForSex, ['sex', 'gender'])) ? "u.`$c`" : "NULL"));
+$sexExpr = "CASE 
+    WHEN LOWER(TRIM($rawSexSource)) IN ('m', 'male') THEN 'Male' 
+    WHEN LOWER(TRIM($rawSexSource)) IN ('f', 'female') THEN 'Female' 
+    ELSE 'N/A' END";
+
+$barangayExpr = ($c = first_existing_column($ipColumns, ['barangay', 'location'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['barangay', 'location'])) ? "d.`$c`" : "NULL");
+$tribeIdExpr = ($c = first_existing_column($ipColumns, ['tribe_clan', 'tribe_id'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['tribe', 'tribe_clan', 'tribe_id'])) ? "d.`$c`" : "NULL");
 
 // Build SQL query with filters
-$selectSql = "SELECT i.ip_member_id, i.first_name, i.middle_name, i.last_name, i.birthdate, i.place_of_birth, i.current_address, i.contact_information, i.member_id, i.sex, i.tribe_clan, t.tribe_name, i.barangay, i.registration_date
+$selectSql = "SELECT i.{$ipPkCol} AS ip_member_id, i.user_id, 
+    {$ipNameExpr} AS full_name, 
+    {$dobExpr} AS birthdate, {$pobExpr} AS place_of_birth, 
+    {$addrExpr} AS current_address, {$contactExpr} AS contact_information, 
+    {$memberIdStrExpr} AS member_id, {$sexExpr} AS sex, 
+    {$tribeIdExpr} AS tribe_clan, t.tribe_name, {$barangayExpr} AS barangay, 
+    {$regDateExpr} AS registration_date, u.account_status AS user_account_status
     FROM ipmembers i
-    LEFT JOIN tribes t ON i.tribe_clan = t.tribe_id";
+    INNER JOIN applications a ON i.{$ipPkCol} = a.ip_member_id
+    LEFT JOIN ip_member_details d ON i.{$ipPkCol} = d.ip_member_id
+    LEFT JOIN tribes t ON {$tribeIdExpr} = t.tribe_id
+    LEFT JOIN users u ON i.user_id = u.{$userPkColForJoin}";
+
 $countSql = "SELECT COUNT(*) AS total
     FROM ipmembers i
-    LEFT JOIN tribes t ON i.tribe_clan = t.tribe_id";
-$whereClauses = [];
+    INNER JOIN applications a ON i.{$ipPkCol} = a.ip_member_id
+    LEFT JOIN ip_member_details d ON i.{$ipPkCol} = d.ip_member_id
+    LEFT JOIN tribes t ON {$tribeIdExpr} = t.tribe_id";
+$whereClauses = ["i.user_id IS NOT NULL", "a.{$appStatusCol} = 'approved'"];
 $params = [];
 $types = '';
 
@@ -45,38 +143,56 @@ $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
 $isAdmin = $currentRole === 'admin';
 
 $displayName = trim((string) ($_SESSION['name'] ?? 'User'));
-if ($displayName === '') {
-    $displayName = 'User';
-}
 
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
+if (is_numeric($displayName) && isset($conn)) {
+    $userPk = (int)($_SESSION['user_id'] ?? 0);
+    $nameRes = $conn->query("SELECT COALESCE(NULLIF(full_name, ''), username, 'Admin User') as real_name FROM users WHERE userid = $userPk OR user_id = $userPk LIMIT 1");
+    if ($nameRes && $row = $nameRes->fetch_assoc()) {
+        $displayName = $row['real_name'];
+        $_SESSION['name'] = $displayName;
+    }
 }
+if ($displayName === '' || is_numeric($displayName)) $displayName = 'Admin User';
+
+$cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+$nameParts = preg_split('/\s+/', trim($cleanName));
+$firstNamePart = $nameParts[0] ?? '';
+$initials = ($firstNamePart !== '') ? strtoupper(substr($firstNamePart, 0, 1)) : 'A';
+$initials .= (count($nameParts) > 1 && end($nameParts) !== '') ? strtoupper(substr(end($nameParts), 0, 1)) : 'U';
+
 
 
 $roleLabel = 'IP Member';
 if ($currentRole === 'admin') {
     $roleLabel = 'System Admin';
 } elseif ($currentRole === 'tribe_leader') {
-    $roleLabel = 'Tribe Leader';
+    $roleLabel = 'Elder';
 }
 
 
 
 // Add search filter
 if ($searchQuery !== '') {
-    $whereClauses[] = "(i.member_id LIKE ? OR i.first_name LIKE ? OR i.middle_name LIKE ? OR i.last_name LIKE ? OR CAST(i.tribe_clan AS CHAR) LIKE ? OR t.tribe_name LIKE ? OR i.barangay LIKE ?)";
+    $searchFields = [$memberIdStrExpr, $ipNameExpr, "t.tribe_name", $barangayExpr];
+    if (in_array('first_name', $ipColumns)) $searchFields[] = "i.first_name";
+    if (in_array('last_name', $ipColumns)) $searchFields[] = "i.last_name";
+    
+    $whereClauses[] = "(" . implode(" LIKE ? OR ", $searchFields) . " LIKE ?)";
+    
     $searchParam = '%' . $searchQuery . '%';
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $types .= 'sssssss';
+    for($i=0; $i<count($searchFields); $i++) { $params[] = $searchParam; $types .= 's'; }
+}
+
+// Add Tribe filter
+if ($selectedTribe !== '' && $selectedTribe !== 'All Tribes') {
+    $whereClauses[] = "t.tribe_name = ?";
+    $params[] = $selectedTribe; $types .= 's';
+}
+
+// Add Barangay filter
+if ($selectedBarangay !== '' && $selectedBarangay !== 'All Barangays') {
+    $whereClauses[] = "{$barangayExpr} = ?";
+    $params[] = $selectedBarangay; $types .= 's';
 }
 
 // Append WHERE clause if needed
@@ -106,7 +222,7 @@ if ($currentPage > $totalPages) {
 }
 
 $offset = ($currentPage - 1) * $perPage;
-$sql = $selectSql . " ORDER BY i.registration_date DESC LIMIT ? OFFSET ?";
+$sql = $selectSql . " ORDER BY {$regDateExpr} DESC LIMIT ? OFFSET ?";
 
 // Execute query
 if (!empty($params)) {
@@ -126,7 +242,7 @@ if (!empty($params)) {
         }
         $stmt->close();
     } else {
-        $error_message = "Prepare failed: " . $conn->error;
+        $errorMessage = "Prepare failed: " . $conn->error;
     }
 } else {
     $stmt = $conn->prepare($sql);
@@ -142,25 +258,12 @@ if (!empty($params)) {
         }
         $stmt->close();
     } else {
-        $error_message = "Prepare failed: " . $conn->error;
+        $errorMessage = "Prepare failed: " . $conn->error;
     }
 }
 
 function escape_html($value) {
     return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
-}
-
-function build_full_name($firstName, $middleName, $lastName) {
-    $parts = [];
-
-    foreach ([$firstName, $middleName, $lastName] as $part) {
-        $part = trim((string) $part);
-        if ($part !== '') {
-            $parts[] = $part;
-        }
-    }
-
-    return implode(' ', $parts);
 }
 
 function get_initials($name) {
@@ -183,7 +286,7 @@ function get_role_badge_class($role) {
         return 'role-badge-admin';
     }
 
-    if ($normalized === 'tribe leader' || $normalized === 'leader') {
+    if ($normalized === 'tribe leader' || $normalized === 'leader' || $normalized === 'elder') {
         return 'role-badge-leader';
     }
 
@@ -238,7 +341,6 @@ function get_last_active_label($lastActive, $status) {
 <body class="min-h-screen">
 
     <?php $activeNav = 'ip_members'; include __DIR__ . '/shared/sidebar.php'; ?>
-    <?php $activeNav = 'lineage_management'; include __DIR__ . '/shared/sidebar.php'; ?>
 
     <div class="ml-64 p-8">
         <header class="flex justify-between items-center pb-6 border-line mb-5">
@@ -262,16 +364,22 @@ function get_last_active_label($lastActive, $status) {
             </div>
         </header>
 
-        <?php if (!empty($error_message)): ?>
+        <?php if ($successMessage !== ''): ?>
+            <div class="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                <?php echo htmlspecialchars($successMessage, ENT_QUOTES, 'UTF-8'); ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($errorMessage)): ?>
             <div class="bg-red-50 border border-red-200 text-red-800 px-6 py-4 rounded-xl mb-6">
                 <p class="font-bold">Database Error:</p>
-                <p class="text-sm"><?php echo escape_html($error_message); ?></p>
-                <p class="text-xs mt-2">Query: <?php echo escape_html($sql); ?></p>
+                <p class="text-sm"><?php echo escape_html($errorMessage); ?></p>
+                <p class="text-xs mt-2">Check the connection and schema mapping.</p>
             </div>
         <?php endif; ?>
 
         <section class="mb-8">
-            <h1 class="text-2xl font-bold text-[#262626]"><?php if ($isAdmin): ?>IP Members<?php else: ?>Lineage Management<?php endif; ?></h1>
+            <h1 class="text-2xl font-bold text-[#262626]">IP Members</h1>
         </section>
 
         <form action="ip_members.php" method="get" class="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
@@ -283,9 +391,10 @@ function get_last_active_label($lastActive, $status) {
 
             <div class="flex items-center gap-3 ml-auto">
                 <div class="relative min-w-[160px]">
-                    <select class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-sm font-semibold text-[#262626] outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer">
-                        <option>All Tribes</option>
-                        <option>Iraynon-Bukidnon</option>
+                    <select name="tribe" onchange="this.form.submit()" class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-sm font-semibold text-[#262626] outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer">
+                        <option value="">All Tribes</option>
+                        <option value="Iraynon-Bukidnon" <?php echo $selectedTribe === 'Iraynon-Bukidnon' ? 'selected' : ''; ?>>Iraynon-Bukidnon</option>
+                        <option value="Ati Tribe" <?php echo $selectedTribe === 'Ati Tribe' ? 'selected' : ''; ?>>Ati Tribe</option>
                     </select>
         
                     <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
@@ -293,9 +402,10 @@ function get_last_active_label($lastActive, $status) {
                     </div>
                 </div>
                 <div class="relative min-w-[160px]">
-                    <select class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-sm font-semibold text-[#262626] outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer">
-                        <option>All Barangays</option>
-                        <option>Villafont</option>
+                    <select name="barangay" onchange="this.form.submit()" class="appearance-none w-full bg-white border border-[#dedede] rounded-xl pl-4 pr-10 py-3 text-sm font-semibold text-[#262626] outline-none focus:ring-2 focus:ring-[#262626]/10 transition cursor-pointer">
+                        <option value="">All Barangays</option>
+                        <option value="Villafont" <?php echo $selectedBarangay === 'Villafont' ? 'selected' : ''; ?>>Villafont</option>
+                        <option value="Hamtic" <?php echo $selectedBarangay === 'Hamtic' ? 'selected' : ''; ?>>Hamtic</option>
                     </select>
         
                     <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
@@ -346,19 +456,11 @@ function get_last_active_label($lastActive, $status) {
                         <!-- Core Identity Block -->
                         <div>
                             <h4 class="mb-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">Core Identity</h4>
-                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
-                                    <span class="block text-[11px] font-medium text-gray-400 uppercase">First Name</span>
-                                    <span id="floatingFirstName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
-                                </div>
-                                <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
-                                    <span class="block text-[11px] font-medium text-gray-400 uppercase">Middle Name</span>
-                                    <span id="floatingMiddleName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
-                                </div>
-                                <div class="bg-gray-50/60 p-3 rounded-xl border border-gray-100">
-                                    <span class="block text-[11px] font-medium text-gray-400 uppercase">Last Name</span>
-                                    <span id="floatingLastName" class="text-sm font-semibold text-[#262626] mt-0.5 block">-</span>
-                                </div>
+                        <div class="grid grid-cols-1 gap-4">
+                            <div class="bg-gray-50/60 p-4 rounded-xl border border-gray-100">
+                                <span class="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">Full Registered Name</span>
+                                <span id="floatingCoreFullName" class="text-base font-bold text-[#262626] mt-1 block">-</span>
+                            </div>
                             </div>
                         </div>
 
@@ -370,6 +472,10 @@ function get_last_active_label($lastActive, $status) {
                                 <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
                                     <span class="text-xs font-medium text-gray-500">Birthdate</span>
                                     <span id="floatingBirthdate" class="text-xs font-bold text-[#262626]">-</span>
+                                </div>
+                                <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
+                                    <span class="text-xs font-medium text-gray-500">Sex / Gender</span>
+                                    <span id="floatingSexText" class="text-xs font-bold text-[#262626]">-</span>
                                 </div>
                                 <div class="flex items-center justify-between py-2.5 border-b border-[#ececea]">
                                     <span class="text-xs font-medium text-gray-500">Place of Birth</span>
@@ -412,7 +518,7 @@ function get_last_active_label($lastActive, $status) {
                     </button>
                     <a id="floatingFamilyTreeLink" href="family_lineage.php" class="inline-flex items-center gap-2 bg-[#262626] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-[#404040] transition-all shadow-sm">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
-                        View Full Family Lineage
+                        View Full Details
                     </a>
                 </div>
 
@@ -434,11 +540,11 @@ function get_last_active_label($lastActive, $status) {
                 <tbody id="memberTableBody" class="text-sm divide-y divide-[#dedede]">
                     <?php if (!empty($ipmembers)): ?>
                         <?php foreach ($ipmembers as $ipmember): ?>
-                            <?php $fullName = build_full_name($ipmember['first_name'] ?? '', $ipmember['middle_name'] ?? '', $ipmember['last_name'] ?? ''); ?>
+                            <?php $fullName = $ipmember['full_name'] ?? 'Unknown Member'; ?>
                             <?php
                                 $tribeLabel = trim((string) ($ipmember['tribe_name'] ?? ''));
                                 if ($tribeLabel === '') {
-                                    $tribeLabel = !empty($ipmember['tribe_clan']) ? 'Tribe ID ' . $ipmember['tribe_clan'] : 'N/A';
+                                    $tribeLabel = !empty($ipmember['tribe_clan']) ? 'Tribe ID ' . $ipmember['tribe_clan'] : 'Not registered yet';
                                 }
                                 $sexValue = strtolower(trim((string) ($ipmember['sex'] ?? '')));
                                 $initialClass = 'bg-gray-100 text-[#262626] border-[#dedede]';
@@ -448,34 +554,47 @@ function get_last_active_label($lastActive, $status) {
                                     $initialClass = 'bg-[#e4e4e7] text-[#18181b] border-[#a1a1aa]';
                                 }
 
-                                $registrationLabel = 'N/A';
-                                if (!empty($ipmember['registration_date'])) {
-                                    $registrationLabel = date('M d, Y', strtotime($ipmember['registration_date']));
+                                $registrationLabel = 'Not registered yet';
+                                $regTimestamp = !empty($ipmember['registration_date']) ? strtotime((string)$ipmember['registration_date']) : false;
+                                if ($regTimestamp && $regTimestamp > 0) {
+                                    $registrationLabel = date('M d, Y', $regTimestamp);
                                 }
                             ?>
+                            <?php 
+                                $associatedUserId = (int)($ipmember['user_id'] ?? 0);
+                                $accountStatus = strtolower(trim((string)($ipmember['user_account_status'] ?? 'active')));
+                                $isAccountDisabled = $accountStatus === 'disabled';
+                            ?>
                             <tr class="member-row cursor-pointer hover:bg-gray-100 transition-colors duration-200"
-                                data-full-name="<?php echo escape_html($fullName !== '' ? $fullName : 'N/A'); ?>"
+                                data-full-name="<?php echo escape_html($fullName !== '' ? $fullName : 'Not registered yet'); ?>"
                                 data-initials="<?php echo escape_html(get_initials($fullName)); ?>"
-                                data-ip-member-id="<?php echo escape_html($ipmember['ip_member_id'] ?? 'N/A'); ?>"
-                                data-first-name="<?php echo escape_html($ipmember['first_name'] ?? 'N/A'); ?>"
-                                data-middle-name="<?php echo escape_html($ipmember['middle_name'] ?? 'N/A'); ?>"
-                                data-last-name="<?php echo escape_html($ipmember['last_name'] ?? 'N/A'); ?>"
-                                data-birthdate="<?php echo escape_html($ipmember['birthdate'] ?? 'N/A'); ?>"
-                                data-place-of-birth="<?php echo escape_html($ipmember['place_of_birth'] ?? 'N/A'); ?>"
-                                data-current-address="<?php echo escape_html($ipmember['current_address'] ?? 'N/A'); ?>"
-                                data-contact-information="<?php echo escape_html($ipmember['contact_information'] ?? 'N/A'); ?>"
-                                data-member-id="<?php echo escape_html($ipmember['member_id'] ?? 'N/A'); ?>"
+                                data-ip-member-id="<?php echo escape_html($ipmember['ip_member_id'] ?? 'Not registered yet'); ?>"
+                                data-first-name="<?php echo escape_html($ipmember['first_name'] ?? 'Not registered yet'); ?>"
+                                data-middle-name="<?php echo escape_html($ipmember['middle_name'] ?? 'Not registered yet'); ?>"
+                                data-last-name="<?php echo escape_html($ipmember['last_name'] ?? 'Not registered yet'); ?>"
+                                data-birthdate="<?php echo escape_html($ipmember['birthdate'] ?? 'Not registered yet'); ?>"
+                                data-place-of-birth="<?php echo escape_html($ipmember['place_of_birth'] ?? 'Not registered yet'); ?>"
+                                data-current-address="<?php echo escape_html($ipmember['current_address'] ?? 'Not registered yet'); ?>"
+                                data-contact-information="<?php echo escape_html($ipmember['contact_information'] ?? 'Not registered yet'); ?>"
+                                data-member-id="<?php echo escape_html($ipmember['member_id'] ?? 'Not Registered'); ?>"
                                 data-sex="<?php echo escape_html($ipmember['sex'] ?? ''); ?>"
                                 data-tribe-clan="<?php echo escape_html($tribeLabel); ?>"
-                                data-barangay="<?php echo escape_html($ipmember['barangay'] ?? 'N/A'); ?>">
+                                data-barangay="<?php echo escape_html($ipmember['barangay'] ?? 'Not registered yet'); ?>">
                                 <td class="px-6 py-4">
                                     <div class="flex items-center gap-3">
                                         <div class="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs border <?php echo escape_html($initialClass); ?>">
                                             <?php echo escape_html(get_initials($fullName)); ?>
                                         </div>
                                         <div>
-                                            <p class="font-bold text-[#262626]"><?php echo escape_html($fullName !== '' ? $fullName : 'N/A'); ?></p>
-                                            <p class="text-[11px] text-gray-400"><?php echo escape_html($ipmember['member_id'] ?? ''); ?></p>
+                                            <p class="font-bold text-[#262626]"><?php echo escape_html($fullName !== '' ? $fullName : 'Not registered yet'); ?></p>
+                                            <?php if (!empty($ipmember['member_id'])): ?>
+                                                <p class="text-[11px] font-bold text-gray-400 uppercase tracking-wider"><?php echo escape_html($ipmember['member_id']); ?></p>
+                                            <?php else: ?>
+                                                <span class="inline-block mt-1 bg-gray-100 text-gray-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-gray-200 uppercase">Not Registered</span>
+                                            <?php endif; ?>
+                                            <?php if ($isAccountDisabled): ?>
+                                                <span class="inline-block mt-1 bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded border border-red-100 uppercase">Account Blocked</span>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
                                 </td>
@@ -483,7 +602,7 @@ function get_last_active_label($lastActive, $status) {
                                     <?php echo escape_html($tribeLabel); ?>
                                 </td>
                                 <td class="px-6 py-4 text-[#262626] font-semibold text-xs">
-                                    <?php echo escape_html($ipmember['barangay'] ?? 'N/A'); ?>
+                                    <?php echo escape_html($ipmember['barangay'] ?? 'Not registered yet'); ?>
                                 </td>
                                 <td class="px-6 py-4 text-gray-600 text-xs">
                                     <?php 
@@ -497,7 +616,7 @@ function get_last_active_label($lastActive, $status) {
                                             : (string) ($ipmember['member_id'] ?? '');
                                     ?>
                                     <?php if ($treeMemberKey !== ''): ?>
-                                        <a href="family_tree.php?member_id=<?php echo rawurlencode($treeMemberKey); ?>" class="row-action inline-flex items-center gap-2 bg-blue-50 text-blue-600 px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-100 transition">
+                                        <a href="verified_lineage.php?member_id=<?php echo rawurlencode($treeMemberKey); ?>" class="row-action inline-flex items-center gap-2 bg-blue-50 text-blue-600 px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-100 transition">
                                             <i data-lucide="git-branch" class="w-4 h-4"></i>
                                             <span class="text-xs font-semibold">View Tree</span>
                                         </a>
@@ -506,21 +625,24 @@ function get_last_active_label($lastActive, $status) {
                                     <?php endif; ?>
                                 </td>
                                 <td class="px-6 py-4 text-right">
-                                    <div class="relative inline-block group">
-                                        <button class="row-action p-2 hover:bg-gray-100 rounded-lg transition" title="More actions">
+                                    <?php if ($associatedUserId > 0): ?>
+                                    <div class="relative inline-block">
+                                        <button type="button" class="action-menu-toggle row-action p-2 hover:bg-gray-100 rounded-lg transition" title="More actions">
                                             <i data-lucide="more-horizontal" class="w-4 h-4 text-gray-400"></i>
                                         </button>
-                                        <div class="hidden absolute right-0 mt-1 w-48 bg-white border border-[#dedede] rounded-lg shadow-lg z-50 group-hover:block">
-                                            <button class="disable-user-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-red-50 hover:text-red-600 transition border-b border-[#ececea]" data-member-id="<?php echo escape_html($ipmember['member_id'] ?? ''); ?>" data-ip-member-id="<?php echo escape_html($ipmember['ip_member_id'] ?? ''); ?>">
-                                                <i data-lucide="ban" class="w-4 h-4 inline-block mr-2"></i>
-                                                Disable User
-                                            </button>
-                                            <button class="disable-account-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-red-50 hover:text-red-600 transition" data-member-id="<?php echo escape_html($ipmember['member_id'] ?? ''); ?>" data-ip-member-id="<?php echo escape_html($ipmember['ip_member_id'] ?? ''); ?>">
-                                                <i data-lucide="lock" class="w-4 h-4 inline-block mr-2"></i>
-                                                Disable Account
+                                        <div class="action-menu hidden absolute right-0 mt-1 w-52 bg-white border border-[#dedede] rounded-xl shadow-lg z-50 p-1.5">
+                                            <button type="button" 
+                                                    class="status-toggle-trigger w-full text-left px-3 py-2 text-xs <?php echo $isAccountDisabled ? 'text-emerald-700 hover:bg-emerald-50' : 'text-red-700 hover:bg-red-50'; ?> transition-all rounded-md font-bold flex items-center gap-2"
+                                                    data-user-id="<?php echo $associatedUserId; ?>"
+                                                    data-full-name="<?php echo escape_html($fullName); ?>"
+                                                    data-action-type="<?php echo $isAccountDisabled ? 'enable' : 'disable'; ?>"
+                                                    data-current-status="<?php echo $accountStatus; ?>">
+                                                <i data-lucide="<?php echo $isAccountDisabled ? 'check-circle' : 'ban'; ?>" class="w-3.5 h-3.5"></i>
+                                                <?php echo $isAccountDisabled ? 'Enable Account' : 'Disable Account'; ?>
                                             </button>
                                         </div>
                                     </div>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -546,7 +668,7 @@ function get_last_active_label($lastActive, $status) {
                 <p class="text-[10px] font-bold text-gray-400 uppercase">Showing <?php echo count($ipmembers); ?> of <?php echo (int) $totalRecords; ?> Members</p>
                 <div class="flex gap-2">
                     <?php if ($currentPage > 1): ?>
-                        <a href="?query=<?php echo urlencode($searchQuery); ?>&page=<?php echo $currentPage - 1; ?>" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-lg hover:bg-white transition">Previous</a>
+                        <a href="?query=<?php echo urlencode($searchQuery); ?>&tribe=<?php echo urlencode($selectedTribe); ?>&barangay=<?php echo urlencode($selectedBarangay); ?>&page=<?php echo $currentPage - 1; ?>" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-lg hover:bg-white transition">Previous</a>
                     <?php else: ?>
                         <span class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-lg text-gray-300 cursor-not-allowed">Previous</span>
                     <?php endif; ?>
@@ -554,13 +676,34 @@ function get_last_active_label($lastActive, $status) {
                     <span class="px-3 py-2 text-xs font-bold text-gray-500">Page <?php echo $currentPage; ?> of <?php echo $totalPages; ?></span>
 
                     <?php if ($currentPage < $totalPages): ?>
-                        <a href="?query=<?php echo urlencode($searchQuery); ?>&page=<?php echo $currentPage + 1; ?>" class="px-4 py-2 text-xs font-bold bg-[#262626] text-white rounded-lg hover:bg-[#404040] transition">Next</a>
+                        <a href="?query=<?php echo urlencode($searchQuery); ?>&tribe=<?php echo urlencode($selectedTribe); ?>&barangay=<?php echo urlencode($selectedBarangay); ?>&page=<?php echo $currentPage + 1; ?>" class="px-4 py-2 text-xs font-bold bg-[#262626] text-white rounded-lg hover:bg-[#404040] transition">Next</a>
                     <?php else: ?>
                         <span class="px-4 py-2 text-xs font-bold bg-[#262626]/30 text-white rounded-lg cursor-not-allowed">Next</span>
                     <?php endif; ?>
                 </div>
             </div>
         </div>
+        </div>
+    </div>
+
+    <!-- Status Toggle Confirmation Modal -->
+    <div id="statusToggleModal" class="hidden fixed inset-0 z-[70] items-center justify-center p-4">
+        <div id="modalBackdrop" class="absolute inset-0 bg-black/40 backdrop-blur-xs"></div>
+        <div class="relative z-10 w-full max-w-md bg-white rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.15)] border border-[#ececea] p-6">
+            <h3 id="modalTitle" class="text-base font-bold text-[#262626] mb-2 flex items-center gap-2"></h3>
+            <p id="modalDescription" class="text-xs text-gray-500 mb-6 leading-relaxed"></p>
+            
+            <form id="statusModalForm" method="POST">
+                <input type="hidden" name="target_user_id" id="modalUserId">
+                <input type="hidden" name="action" value="toggle_status">
+                <input type="hidden" name="current_status" id="modalCurrentStatus">
+                <div class="flex justify-end gap-3">
+                    <button type="button" onclick="closeStatusModal()" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-xl hover:bg-gray-50 text-gray-600 transition-all">Cancel</button>
+                    <button type="submit" id="modalConfirmBtn" class="px-4 py-2 text-xs font-bold text-white rounded-xl transition-all shadow-sm">
+                        Confirm
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -597,9 +740,7 @@ function get_last_active_label($lastActive, $status) {
         if (memberTableBody && floatingMemberCard) {
             const floatingInitials = document.getElementById('floatingInitials');
             const floatingFullName = document.getElementById('floatingFullName');
-            const floatingFirstName = document.getElementById('floatingFirstName');
-            const floatingMiddleName = document.getElementById('floatingMiddleName');
-            const floatingLastName = document.getElementById('floatingLastName');
+            const floatingCoreFullName = document.getElementById('floatingCoreFullName');
             const floatingBirthdate = document.getElementById('floatingBirthdate');
             const floatingPlaceOfBirth = document.getElementById('floatingPlaceOfBirth');
             const floatingCurrentAddress = document.getElementById('floatingCurrentAddress');
@@ -624,17 +765,19 @@ function get_last_active_label($lastActive, $status) {
                 }
 
                 // Inside your existing click event function:
-                floatingFullName.textContent = row.dataset.fullName || 'N/A';
-                floatingFirstName.textContent = row.dataset.firstName || 'N/A';
-                floatingMiddleName.textContent = row.dataset.middleName || 'N/A';
-                floatingLastName.textContent = row.dataset.lastName || 'N/A';
-                floatingBirthdate.textContent = row.dataset.birthdate || 'N/A';
-                floatingPlaceOfBirth.textContent = row.dataset.placeOfBirth || 'N/A';
-                floatingCurrentAddress.textContent = row.dataset.currentAddress || 'N/A';
-                floatingContactInformation.textContent = row.dataset.contactInformation || 'N/A';
-                floatingMemberId.textContent = row.dataset.memberId || 'N/A';
-                floatingTribeClan.textContent = row.dataset.tribeClan || 'N/A';
-                floatingBarangay.textContent = row.dataset.barangay || 'N/A';
+                floatingFullName.textContent = row.dataset.fullName || 'Not registered yet';
+                if (floatingCoreFullName) floatingCoreFullName.textContent = row.dataset.fullName || 'Not registered yet';
+                floatingBirthdate.textContent = row.dataset.birthdate || 'Not registered yet';
+                floatingPlaceOfBirth.textContent = row.dataset.placeOfBirth || 'Not registered yet';
+                floatingCurrentAddress.textContent = row.dataset.currentAddress || 'Not registered yet';
+                floatingContactInformation.textContent = row.dataset.contactInformation || 'Not registered yet';
+                floatingMemberId.textContent = row.dataset.memberId || 'Not Registered';
+                floatingTribeClan.textContent = row.dataset.tribeClan || 'Not registered yet';
+                floatingBarangay.textContent = row.dataset.barangay || 'Not registered yet';
+
+                const rawSex = (row.dataset.sex || '').toLowerCase();
+                const displaySex = (rawSex === 'm' || rawSex === 'male') ? 'Male' : ((rawSex === 'f' || rawSex === 'female') ? 'Female' : 'N/A');
+                document.getElementById('floatingSexText').textContent = displaySex;
 
                 // Handle dynamic profile context letter badge
                 if (floatingInitials) {
@@ -653,7 +796,7 @@ function get_last_active_label($lastActive, $status) {
 
                 if (floatingFamilyTreeLink) {
                     const selectedMemberId = row.dataset.ipMemberId || row.dataset.memberId || '';
-                    if (selectedMemberId && selectedMemberId !== 'N/A') {
+                    if (selectedMemberId && selectedMemberId !== 'Not registered yet') {
                         // Direct matching to family lineage viewer dashboard
                         floatingFamilyTreeLink.href = 'family_lineage.php?member_id=' + encodeURIComponent(selectedMemberId);
                     } else {
@@ -683,38 +826,62 @@ function get_last_active_label($lastActive, $status) {
             }
         });
 
-        // Handle disable user and disable account buttons
-        document.querySelectorAll('.disable-user-btn').forEach(button => {
-            button.addEventListener('click', function(e) {
-                e.preventDefault();
-                const memberId = this.dataset.memberId;
-                const ipMemberId = this.dataset.ipMemberId;
-                
-                if (confirm('Are you sure you want to disable this user? This action cannot be easily undone.')) {
-                    // Send request to disable user
-                    console.log('Disabling user:', memberId || ipMemberId);
-                    // You can add AJAX call here to backend API
-                    // Example: fetch('/api/user/disable', { method: 'POST', body: JSON.stringify({member_id: memberId}) })
-                    alert('User disable functionality to be implemented');
-                }
-            });
-        });
+        // --- Account Status Toggle Modal Logic ---
+        function openStatusModal(userId, fullName, actionType, currentStatus) {
+            const modal = document.getElementById('statusToggleModal');
+            const title = document.getElementById('modalTitle');
+            const description = document.getElementById('modalDescription');
+            const confirmBtn = document.getElementById('modalConfirmBtn');
+            
+            document.getElementById('modalUserId').value = userId;
+            document.getElementById('modalCurrentStatus').value = currentStatus;
 
-        document.querySelectorAll('.disable-account-btn').forEach(button => {
-            button.addEventListener('click', function(e) {
-                e.preventDefault();
-                const memberId = this.dataset.memberId;
-                const ipMemberId = this.dataset.ipMemberId;
-                
-                if (confirm('Are you sure you want to disable this account? This action cannot be easily undone.')) {
-                    // Send request to disable account
-                    console.log('Disabling account:', memberId || ipMemberId);
-                    // You can add AJAX call here to backend API
-                    // Example: fetch('/api/account/disable', { method: 'POST', body: JSON.stringify({member_id: memberId}) })
-                    alert('Account disable functionality to be implemented');
-                }
-            });
+            if (actionType === 'disable') {
+                title.innerHTML = '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Confirm Deactivation';
+                description.innerHTML = `Are you sure you want to <b>DISABLE</b> the associated login account for <b>${fullName}</b>? <br><br>The user will be immediately logged out and blocked from the system.`;
+                confirmBtn.className = 'px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-xl transition-all shadow-sm';
+                confirmBtn.textContent = 'Confirm Disable';
+            } else {
+                title.innerHTML = '<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Restore Access';
+                description.innerHTML = `Are you sure you want to <b>re-enable</b> the login account for <b>${fullName}</b>?`;
+                confirmBtn.className = 'px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-all shadow-sm';
+                confirmBtn.textContent = 'Confirm Enable';
+            }
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeStatusModal() {
+            const modal = document.getElementById('statusToggleModal');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                document.body.style.overflow = '';
+            }
+        }
+
+        document.getElementById('modalBackdrop')?.addEventListener('click', closeStatusModal);
+
+        document.addEventListener('click', (e) => {
+            const toggle = e.target.closest('.action-menu-toggle');
+            const statusTrigger = e.target.closest('.status-toggle-trigger');
+            const menu = e.target.closest('.action-menu');
+            
+            if (statusTrigger) {
+                const { userId, fullName, actionType, currentStatus } = statusTrigger.dataset;
+                openStatusModal(userId, fullName, actionType, currentStatus);
+                if (menu) menu.classList.add('hidden');
+            } else if (toggle) {
+                const targetMenu = toggle.nextElementSibling;
+                document.querySelectorAll('.action-menu').forEach(m => { if (m !== targetMenu) m.classList.add('hidden'); });
+                targetMenu.classList.toggle('hidden');
+            } else if (!menu) {
+                document.querySelectorAll('.action-menu').forEach(m => m.classList.add('hidden'));
+            }
         });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeStatusModal(); });
     </script>
 </body>
 </html>

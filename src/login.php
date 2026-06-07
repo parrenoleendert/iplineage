@@ -46,11 +46,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             return null;
         };
 
-        $idColumn = $findFirstColumn(['user_id', 'id']);
+        $idColumn = $findFirstColumn(['user_id', 'id', 'userid']);
         $roleColumn = $findFirstColumn(['role', 'user_role']);
         $nameColumn = $findFirstColumn(['full_name', 'name', 'username']);
         $emailColumn = $findFirstColumn(['email']);
         $usernameColumn = $findFirstColumn(['username']);
+        $firstNameCol = $findFirstColumn(['first_name', 'firstname']);
+        $lastNameCol = $findFirstColumn(['last_name', 'lastname']);
+        $statusColumn = $findFirstColumn(['account_status', 'status', 'user_status', 'is_active', 'active', 'state']);
         $passwordColumn = $findFirstColumn(['password_hash', 'password']);
 
         if ($idColumn === null || $roleColumn === null || $passwordColumn === null || ($emailColumn === null && $usernameColumn === null)) {
@@ -72,8 +75,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $types .= 's';
             }
 
-            $selectedName = $nameColumn !== null ? $nameColumn : $idColumn;
-            $sql = "SELECT {$idColumn} AS user_id, {$selectedName} AS display_name, {$roleColumn} AS role, {$passwordColumn} AS password_value FROM users WHERE " . implode(' OR ', $identifierConditions) . ' LIMIT 1';
+            $nameCandidates = [];
+            if ($nameColumn) $nameCandidates[] = "NULLIF(`$nameColumn`, '')";
+            if ($firstNameCol && $lastNameCol) $nameCandidates[] = "NULLIF(TRIM(CONCAT_WS(' ', `$firstNameCol`, `$lastNameCol`)), '')";
+            elseif ($firstNameCol) $nameCandidates[] = "NULLIF(`$firstNameCol`, '')";
+            elseif ($lastNameCol) $nameCandidates[] = "NULLIF(`$lastNameCol`, '')";
+            if ($usernameColumn) $nameCandidates[] = "NULLIF(`$usernameColumn`, '')";
+            if ($emailColumn) $nameCandidates[] = "NULLIF(`$emailColumn`, '')";
+            
+            $selectedName = !empty($nameCandidates) 
+                ? "COALESCE(" . implode(', ', $nameCandidates) . ", 'User')" 
+                : "'User'";
+            $statusExpr = $statusColumn !== null ? "{$statusColumn} AS status" : "'Active' AS status";
+            $sql = "SELECT {$idColumn} AS user_id, {$selectedName} AS display_name, `{$roleColumn}` AS role, `{$passwordColumn}` AS password_value, {$statusExpr} FROM users WHERE " . implode(' OR ', $identifierConditions) . ' LIMIT 1';
             $stmt = $conn->prepare($sql);
 
             if (!$stmt) {
@@ -102,12 +116,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if (!$passwordVerified) {
                         $loginError = 'Invalid login credentials.';
+                    } elseif (isset($user['status']) && strtolower(trim((string)$user['status'])) === 'disabled') {
+                        $loginError = 'Your account has been disabled. Please contact the administrator.';
                     } else {
                         session_regenerate_id(true);
                         $_SESSION['user_id'] = $user['user_id'];
                         $_SESSION['name'] = (string) ($user['display_name'] ?? 'User');
                         $_SESSION['role'] = normalize_role((string) ($user['role'] ?? 'ip_member'));
 
+                        // Mark user as Online in the database upon successful login
+                        touch_user_activity((int)$user['user_id']);
+
+                        // If IP Member has no ipmembers record yet (ip_member_id is NULL/0), send them to personal registration.
+                        if (normalize_role((string) $_SESSION['role']) === 'ip_member') {
+                            $userId = (int) ($_SESSION['user_id'] ?? 0);
+                            $hasIpMemberRecord = false;
+                            $isApproved = false;
+
+                            if ($userId > 0) {
+                                // Check both the member record and the application status
+                                $ipMemberCheckSql = "SELECT i.ip_member_id, a.status 
+                                                     FROM ipmembers i 
+                                                     LEFT JOIN applications a ON i.ip_member_id = a.ip_member_id 
+                                                     WHERE i.user_id = ? 
+                                                     ORDER BY a.application_id DESC LIMIT 1";
+                                $ipStmt = $conn->prepare($ipMemberCheckSql);
+                                if ($ipStmt) {
+                                    $ipStmt->bind_param('i', $userId);
+                                    $ipStmt->execute();
+                                    $res = $ipStmt->get_result();
+                                    $row = $res instanceof mysqli_result ? $res->fetch_assoc() : null;
+                                    $ipStmt->close();
+
+                                    $ipMemberId = (int) ($row['ip_member_id'] ?? 0);
+                                    $status = (string) ($row['status'] ?? '');
+                                    $hasIpMemberRecord = $ipMemberId > 0;
+                                    $isApproved = ($status === 'approved');
+                                }
+                            }
+
+                            if (!$hasIpMemberRecord) {
+                                // Mark session so other pages can block navigation until registration is complete.
+                                $_SESSION['ip_registration_complete'] = false;
+                                header('Location: personal.php');
+                                exit;
+                            }
+
+                            if (!$isApproved) {
+                                // Record exists but not yet approved - send to standby
+                                $_SESSION['ip_registration_complete'] = false;
+                                header('Location: verify.php');
+                                exit;
+                            }
+                        }
+
+                        $_SESSION['ip_registration_complete'] = true;
                         redirect_to_role_dashboard((string) $_SESSION['role']);
                     }
                 }

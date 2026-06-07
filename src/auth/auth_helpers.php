@@ -1,5 +1,52 @@
 <?php
 
+if (!function_exists('first_existing_column')) {
+    /**
+     * Finds the first column name that exists in the provided schema array.
+     */
+    function first_existing_column(array $columns, array $candidates): ?string {
+        foreach ($candidates as $candidate) {
+            if (in_array($candidate, $columns, true)) {
+                return $candidate;
+            }
+        }
+        return null;
+    }
+}
+
+/**
+ * Returns standardized display name, initials, and role label for headers.
+ */
+function get_header_profile_data(array &$session): array {
+    $displayName = trim((string)($session['name'] ?? 'User'));
+    
+    // Session Repair: If session name is numeric (e.g. user ID "2"), fetch real name from DB
+    if (is_numeric($displayName)) {
+        $conn = $GLOBALS['conn'] ?? null;
+        if ($conn instanceof mysqli) {
+            $userPk = (int)($session['user_id'] ?? 0);
+            $nameRes = $conn->query("SELECT COALESCE(NULLIF(full_name, ''), username, 'Admin User') as real_name FROM users WHERE userid = $userPk OR user_id = $userPk LIMIT 1");
+            if ($nameRes && $row = $nameRes->fetch_assoc()) {
+                $displayName = $row['real_name'];
+                $session['name'] = $displayName;
+            }
+        }
+    }
+    if ($displayName === '' || is_numeric($displayName)) $displayName = 'Admin User';
+    
+    $displayName = mb_convert_case($displayName, MB_CASE_TITLE, "UTF-8");
+    
+    $cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+    $nameParts = preg_split('/\s+/', trim($cleanName));
+    $initials = strtoupper(substr($nameParts[0] ?? 'A', 0, 1));
+    $initials .= (count($nameParts) > 1) ? strtoupper(substr(end($nameParts), 0, 1)) : 'U';
+
+    $role = normalize_role((string)($session['role'] ?? ''));
+    $roleLabel = ($role === 'admin') ? 'System Admin' : (($role === 'tribe_leader') ? 'Elder' : 'IP Member');
+    
+    return [$displayName, $initials, $roleLabel];
+}
+
 function normalize_role(string $role): string
 {
     $value = strtolower(trim($role));
@@ -12,7 +59,7 @@ function normalize_role(string $role): string
         return 'tribe_leader';
     }
 
-    if ($value === 'ip member' || $value === 'ip_member' || $value === 'member') {
+    if ($value === 'ip member' || $value === 'ip_member' || $value === 'member' || $value === 'ip memeber') {
         return 'ip_member';
     }
 
@@ -22,6 +69,37 @@ function normalize_role(string $role): string
 function get_role_dashboard_path(string $role): string
 {
     $normalized = normalize_role($role);
+
+    // Force unregistered IP members to the registration page.
+    if ($normalized === 'ip_member') {
+        $isComplete = (bool)($_SESSION['ip_registration_complete'] ?? false);
+        
+        if (!$isComplete) {
+            require_once __DIR__ . '/../dbconfig.php';
+            $conn = $GLOBALS['conn'] ?? null;
+            $uid = (int)($_SESSION['user_id'] ?? 0);
+
+            if ($conn && $uid > 0) {
+                // Check database to see where they actually are in the process
+                $sql = "SELECT a.status FROM ipmembers i 
+                        LEFT JOIN applications a ON i.ip_member_id = a.ip_member_id 
+                        WHERE i.user_id = ? ORDER BY a.application_id DESC LIMIT 1";
+                $stmt = $conn->prepare($sql);
+                if ($stmt) {
+                    $stmt->bind_param('i', $uid);
+                    $stmt->execute();
+                    $row = $stmt->get_result()->fetch_assoc();
+                    $status = $row['status'] ?? '';
+                    
+                    // If they have an application but it's not approved, they belong in verify.php
+                    if ($status !== '' && $status !== 'approved') {
+                        return 'verify.php';
+                    }
+                }
+            }
+            return 'personal.php';
+        }
+    }
 
     if ($normalized === 'admin') {
         if (file_exists(__DIR__ . '/../dashboard.php')) {
@@ -87,9 +165,9 @@ function touch_user_activity(int $userId): void
         };
 
         $resolved = [
-            'id' => $findFirst(['user_id', 'id']),
-            'last_active' => $findFirst(['last_active']),
-            'status' => $findFirst(['status']),
+            'id' => $findFirst(['userid', 'user_id', 'id']),
+            'last_active' => $findFirst(['last_active', 'updated_at', 'last_login', 'last_activity', 'last_seen', 'active_at', 'login_at']),
+            'status' => $findFirst(['account_status', 'status', 'user_status', 'is_active', 'active', 'state']),
         ];
     }
 
@@ -102,19 +180,52 @@ function touch_user_activity(int $userId): void
         return;
     }
 
+    // Safety: Check if user is disabled before setting them to online
+    if (!empty($resolved['status'])) {
+        $checkSql = "SELECT `{$resolved['status']}` FROM users WHERE `{$resolved['id']}` = ? LIMIT 1";
+        $checkStmt = $conn->prepare($checkSql);
+        if ($checkStmt) {
+            $checkStmt->bind_param('i', $userId);
+            $checkStmt->execute();
+            $checkRow = $checkStmt->get_result()->fetch_assoc();
+            $checkStmt->close();
+            if ($checkRow) {
+                $currentStatusVal = strtolower(trim((string)($checkRow[$resolved['status']] ?? '')));
+                // Only block if account is explicitly disabled or banned
+                if (in_array($currentStatusVal, ['disabled', 'banned', 'inactive'], true)) {
+                    return;
+                }
+            }
+        }
+    }
+
+
     $setParts = ["`{$resolved['last_active']}` = NOW()"];
     if (!empty($resolved['status'])) {
         $setParts[] = "`{$resolved['status']}` = 'online'";
     }
 
     $sql = "UPDATE users SET " . implode(', ', $setParts) . " WHERE `{$resolved['id']}` = ? LIMIT 1";
+
     $stmt = $conn->prepare($sql);
     if ($stmt) {
         $stmt->bind_param('i', $userId);
-        $stmt->execute();
+        $ok = $stmt->execute();
+
+        // Temporary debug: log resolved columns and what we set.
+        // Remove after confirming the correct behavior.
+        if (!$ok) {
+            error_log('[touch_user_activity] UPDATE failed for userId=' . $userId . ' sql=' . $sql . ' err=' . $conn->error);
+        } else {
+            error_log('[touch_user_activity] UPDATED userId=' . $userId . ' set=' . implode(', ', $setParts) . ' resolved=' . json_encode($resolved));
+        }
+
         $stmt->close();
+    } else {
+        error_log('[touch_user_activity] prepare failed for userId=' . $userId . ' sql=' . $sql . ' err=' . $conn->error);
     }
 }
+
 
 function mark_user_offline(int $userId): void
 {
@@ -135,9 +246,9 @@ function mark_user_offline(int $userId): void
         }
     }
 
-    $idColumn = in_array('user_id', $columns, true) ? 'user_id' : (in_array('id', $columns, true) ? 'id' : null);
-    $statusColumn = in_array('status', $columns, true) ? 'status' : null;
-    $lastActiveColumn = in_array('last_active', $columns, true) ? 'last_active' : null;
+    $idColumn = first_existing_column($columns, ['userid', 'user_id', 'id']);
+    $statusColumn = first_existing_column($columns, ['account_status', 'status', 'user_status', 'is_active', 'active', 'state']);
+    $lastActiveColumn = first_existing_column($columns, ['last_active', 'updated_at', 'last_login', 'last_activity', 'last_seen', 'active_at', 'login_at']);
 
     if ($idColumn === null || $statusColumn === null) {
         return;

@@ -1,7 +1,16 @@
 <?php
 require_once __DIR__ . '/auth/guards.php';
 require_any_role(['admin']);
-include 'dbconfig.php';
+
+require_once __DIR__ . '/dbconfig.php';
+$conn = $GLOBALS['conn'] ?? ($conn ?? null);
+
+if (!isset($conn) || !($conn instanceof mysqli) || $conn->connect_errno) {
+    if (isset($conn) && $conn->connect_errno) {
+        die('Database connection error: ' . $conn->connect_error);
+    }
+    die('Database connection error: Please check src/dbconfig.php');
+}
 
 // Get search parameters
 $searchQuery = isset($_GET['query']) ? trim($_GET['query']) : '';
@@ -14,18 +23,30 @@ if ($currentPage < 1) {
 $totalRecords = 0;
 $totalPages = 1;
 
+$errorMessage = '';
+$successMessage = $_SESSION['success_message'] ?? '';
+unset($_SESSION['success_message']);
+
 $users = [];
 
 $displayName = trim((string) ($_SESSION['name'] ?? 'User'));
-if ($displayName === '') {
-    $displayName = 'User';
-}
 
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
+if (is_numeric($displayName) && isset($conn)) {
+    $userPk = (int)($_SESSION['user_id'] ?? 0);
+    $nameRes = $conn->query("SELECT COALESCE(NULLIF(full_name, ''), username, 'Admin User') as real_name FROM users WHERE userid = $userPk OR user_id = $userPk LIMIT 1");
+    if ($nameRes && $row = $nameRes->fetch_assoc()) {
+        $displayName = $row['real_name'];
+        $_SESSION['name'] = $displayName;
+    }
 }
+if ($displayName === '' || is_numeric($displayName)) $displayName = 'Admin User';
+
+$cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+$nameParts = preg_split('/\s+/', trim($cleanName));
+$firstNamePart = $nameParts[0] ?? '';
+$initials = ($firstNamePart !== '') ? strtoupper(substr($firstNamePart, 0, 1)) : 'A';
+$initials .= (count($nameParts) > 1 && end($nameParts) !== '') ? strtoupper(substr(end($nameParts), 0, 1)) : 'U';
+
 
 
 $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
@@ -33,7 +54,7 @@ $roleLabel = 'IP Member';
 if ($currentRole === 'admin') {
     $roleLabel = 'System Admin';
 } elseif ($currentRole === 'tribe_leader') {
-    $roleLabel = 'Tribe Leader';
+    $roleLabel = 'Elder';
 }
 
 
@@ -51,26 +72,85 @@ function get_table_columns($conn, $tableName) {
     return $columns;
 }
 
-function first_existing_column($columns, $candidates) {
-    foreach ($candidates as $candidate) {
-        if (in_array($candidate, $columns, true)) {
-            return $candidate;
+if (!function_exists('first_existing_column')) {
+    function first_existing_column($columns, $candidates) {
+        foreach ($candidates as $candidate) {
+            if (in_array($candidate, $columns, true)) {
+                return $candidate;
+            }
         }
-    }
 
-    return null;
+        return null;
+    }
 }
 
 $userColumns = get_table_columns($conn, 'users');
-$userSexColumn = first_existing_column($userColumns, ['sex', 'gender']);
+
+// 1. Detect Primary Key (Crucial for fallbacks)
+$pkCol = first_existing_column($userColumns, ['userid', 'user_id', 'id']) ?? 'id';
+
+// 2. Robust Name Detection
+$nameCol = first_existing_column($userColumns, ['full_name', 'name', 'username', 'display_name']);
+if ($nameCol !== null) {
+    $nameExpression = "`{$nameCol}`";
+} elseif (in_array('first_name', $userColumns, true) && in_array('last_name', $userColumns, true)) {
+    $nameExpression = "TRIM(CONCAT_WS(' ', first_name, last_name))";
+} elseif (in_array('first_name', $userColumns, true)) {
+    $nameExpression = "`first_name`";
+} else {
+    $nameExpression = "'User'";
+}
+
+// 3. Map Other Columns with Safe Fallbacks
+$emailCol = first_existing_column($userColumns, ['email', 'email_address', 'user_email', 'email_addr']) ?? 'email';
+$roleCol  = first_existing_column($userColumns, ['role', 'user_role', 'role_id', 'privilege', 'user_level']) ?? 'role';
+$lastActiveCol = first_existing_column($userColumns, ['last_active', 'updated_at', 'last_login', 'last_activity', 'last_seen', 'active_at', 'login_at']) ?? $pkCol;
+$statusCol = first_existing_column($userColumns, ['account_status', 'status', 'user_status', 'is_active', 'active', 'state']) ?? $pkCol;
+$sexCol    = first_existing_column($userColumns, ['sex', 'gender']);
+
+$avatarExpr = in_array('avatar', $userColumns, true) ? '`avatar`' : "'' AS `avatar`";
+$jurisdictionCol = first_existing_column($userColumns, ['juresdiction', 'jurisdiction', 'area', 'region', 'assignment', 'location', 'jurisdiction_area']);
+$jurisdictionExpr = ($jurisdictionCol !== null) ? "`{$jurisdictionCol}` AS `jurisdiction`" : "'' AS `jurisdiction`";
+
+// --- Handle Account Disabling ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['user_id'])) {
+    $targetUserId = (int)$_POST['user_id'];
+    $action = $_POST['action'];
+
+    if ($action === 'toggle_status' && $statusCol !== $pkCol) {
+        $currentStatus = $_POST['current_status'] ?? '';
+        $isCurrentlyDisabled = strtolower(trim($currentStatus)) === 'disabled';
+        $newStatus = $isCurrentlyDisabled ? 'Offline' : 'Disabled';
+        
+        $updateSql = "UPDATE users SET `{$statusCol}` = ? WHERE `{$pkCol}` = ? LIMIT 1";
+        $stmt = $conn->prepare($updateSql);
+        if ($stmt) {
+            $stmt->bind_param('si', $newStatus, $targetUserId);
+            if ($stmt->execute()) {
+                $_SESSION['success_message'] = "User account " . ($newStatus === 'Disabled' ? 'disabled' : 'enabled') . " successfully.";
+                header("Location: user_management.php?query=" . urlencode($searchQuery) . "&role=" . urlencode($roleFilter) . "&page=" . $currentPage);
+                exit;
+            }
+            $stmt->close();
+        }
+    }
+}
 
 // Build SQL query with filters
-$selectColumns = ['avatar', 'full_name', 'email', 'role', 'jurisdiction', 'last_active', 'status'];
-if ($userSexColumn !== null) {
-    $selectColumns[] = "`{$userSexColumn}` AS sex";
-} else {
-    $selectColumns[] = "'' AS sex";
-}
+$selectColumns = [
+    "`{$pkCol}` AS `user_id` ",
+    $avatarExpr,
+    "{$nameExpression} AS `full_name`",
+    "`{$emailCol}` AS `email`",
+    "`{$roleCol}` AS `role`",
+    $jurisdictionExpr,
+    ($lastActiveCol !== $pkCol ? "`{$lastActiveCol}`" : "NULL") . " AS `last_active`" ,
+    "`{$statusCol}` AS `status`"
+];
+
+if ($sexCol !== null) {
+    $selectColumns[] = "`{$sexCol}` AS `sex`";
+} else { $selectColumns[] = "'' AS `sex`"; }
 
 $baseSql = 'FROM users';
 $whereClauses = [];
@@ -79,17 +159,15 @@ $types = '';
 
 // Add search filter
 if ($searchQuery !== '') {
-    $whereClauses[] = "(full_name LIKE ? OR email LIKE ? OR role LIKE ?)";
+    $whereClauses[] = "({$nameExpression} LIKE ? OR `{$emailCol}` LIKE ? OR `{$roleCol}` LIKE ?)";
     $searchParam = '%' . $searchQuery . '%';
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $params[] = $searchParam;
+    array_push($params, $searchParam, $searchParam, $searchParam);
     $types .= 'sss';
 }
 
 // Add role filter
 if ($roleFilter !== '' && $roleFilter !== 'All Roles') {
-    $whereClauses[] = "role = ?";
+    $whereClauses[] = "`{$roleCol}` = ?";
     $params[] = $roleFilter;
     $types .= 's';
 }
@@ -111,12 +189,16 @@ if (!empty($params)) {
             $totalRecords = (int) ($countRow['total'] ?? 0);
         }
         $countStmt->close();
+    } else {
+        $errorMessage = "Error preparing user count: " . $conn->error;
     }
 } else {
     $countResult = $conn->query($countSql);
     if ($countResult instanceof mysqli_result) {
         $countRow = $countResult->fetch_assoc();
         $totalRecords = (int) ($countRow['total'] ?? 0);
+    } else {
+        $errorMessage = "Error counting users: " . $conn->error;
     }
 }
 
@@ -127,7 +209,7 @@ if ($currentPage > $totalPages) {
 
 $offset = ($currentPage - 1) * $perPage;
 
-$sql = 'SELECT ' . implode(', ', $selectColumns) . ' ' . $baseSql . " ORDER BY last_active DESC LIMIT ? OFFSET ?";
+$sql = 'SELECT ' . implode(', ', $selectColumns) . ' ' . $baseSql . " ORDER BY `{$lastActiveCol}` DESC LIMIT ? OFFSET ?";
 
 // Execute query
 if (!empty($params)) {
@@ -144,8 +226,12 @@ if (!empty($params)) {
             while ($row = $result->fetch_assoc()) {
                 $users[] = $row;
             }
+        } else {
+            $errorMessage = "Error fetching users: " . $conn->error;
         }
         $stmt->close();
+    } else {
+        $errorMessage = "Error preparing user query: " . $conn->error;
     }
 } else {
     $stmt = $conn->prepare($sql);
@@ -158,8 +244,12 @@ if (!empty($params)) {
             while ($row = $result->fetch_assoc()) {
                 $users[] = $row;
             }
+        } else {
+            $errorMessage = "Error fetching users: " . $conn->error;
         }
         $stmt->close();
+    } else {
+        $errorMessage = "Error preparing user query: " . $conn->error;
     }
 }
 
@@ -187,7 +277,7 @@ function get_role_badge_class($role) {
         return 'role-badge-admin';
     }
 
-    if ($normalized === 'tribe leader' || $normalized === 'leader') {
+    if ($normalized === 'tribe leader' || $normalized === 'leader' || $normalized === 'elder') {
         return 'role-badge-leader';
     }
 
@@ -275,10 +365,8 @@ function get_last_active_label($lastActive, $status) {
                 <div class="flex items-center gap-3 bg-white border border-[#dedede] p-1.5 pr-4 rounded-xl shadow-sm">
                     <div class="w-8 h-8 rounded-lg bg-[#262626] text-[#f3f4f1] flex items-center justify-center font-bold text-xs uppercase"><?php echo htmlspecialchars($initials); ?></div>
                     <div>
-                        <div>
                         <p class="text-xs font-bold leading-none text-[#262626]"><?php echo htmlspecialchars($displayName); ?></p>
                         <p class="text-[10px] text-gray-400 uppercase tracking-tighter"><?php echo htmlspecialchars($roleLabel); ?></p>
-                    </div>
                     </div>
                 </div>
             </div>
@@ -287,6 +375,18 @@ function get_last_active_label($lastActive, $status) {
         <section class="mb-8">
             <h1 class="text-2xl font-bold text-[#262626]">User Management</h1>
         </section>
+
+        <?php if ($successMessage !== ''): ?>
+            <div class="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                <?php echo htmlspecialchars($successMessage, ENT_QUOTES, 'UTF-8'); ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($errorMessage !== ''): ?>
+            <div class="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <?php echo htmlspecialchars($errorMessage, ENT_QUOTES, 'UTF-8'); ?>
+            </div>
+        <?php endif; ?>
 
         <form action="user_management.php" method="get" class="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div class="relative w-full md:w-96">
@@ -300,7 +400,7 @@ function get_last_active_label($lastActive, $status) {
                     <option value="" <?php echo $roleFilter === '' ? 'selected' : ''; ?>>All Roles</option>
                     <option value="Admin" <?php echo $roleFilter === 'Admin' ? 'selected' : ''; ?>>Admin</option>
                     <option value="System Admin" <?php echo $roleFilter === 'System Admin' ? 'selected' : ''; ?>>System Admin</option>
-                    <option value="Tribe Leader" <?php echo $roleFilter === 'Tribe Leader' ? 'selected' : ''; ?>>Tribe Leader</option>
+                    <option value="Tribe Leader" <?php echo $roleFilter === 'Tribe Leader' ? 'selected' : ''; ?>>Elder</option>
                     <option value="IP Member" <?php echo $roleFilter === 'IP Member' ? 'selected' : ''; ?>>IP Member</option>
                 </select>
                 
@@ -317,6 +417,7 @@ function get_last_active_label($lastActive, $status) {
                         <th class="px-6 py-4">User Details</th>
                         <th class="px-7 py-4">Role</th>
                         <th class="px-6 py-4">Jurisdiction</th>
+                        <th class="px-6 py-4">Status</th>
                         <th class="px-6 py-4">Last Active</th>
                         <th class="px-6 py-4 text-right">Actions</th>
                     </tr>
@@ -328,6 +429,10 @@ function get_last_active_label($lastActive, $status) {
                                 $badgeClass = get_role_badge_class($user['role'] ?? '');
                                 $lastActiveLabel = get_last_active_label($user['last_active'] ?? '', $user['status'] ?? '');
                                 $isOnline = strtolower(trim((string) ($user['status'] ?? ''))) === 'online';
+                                $isActiveToday = $lastActiveLabel === 'Active today';
+                                $userStatusRaw = strtolower(trim((string) ($user['status'] ?? '')));
+                                $isDisabled = $userStatusRaw === 'disabled';
+                                
                                 $sexValue = strtolower(trim((string) ($user['sex'] ?? '')));
                                 $initialClass = 'bg-gray-100 text-[#262626] border-[#dedede]';
                                 if ($sexValue === 'male' || $sexValue === 'm') {
@@ -349,19 +454,42 @@ function get_last_active_label($lastActive, $status) {
                                     </div>
                                 </td>
                                 <td class="px-6 py-4">
-                                    <span class="<?php echo escape_html($badgeClass); ?> px-4 py-1 rounded-md text-[11px] font-bold uppercase">
+                                    <span class="<?php echo escape_html($badgeClass); ?> px-4 py-1 rounded-md text-[11px] font-bold uppercase w-fit">
                                         <?php echo escape_html($user['role'] ?? 'IP Member'); ?>
                                     </span>
                                 </td>
                                 <td class="px-6 py-4 text-[#262626] font-semibold text-xs"><?php echo escape_html($user['jurisdiction'] ?? 'N/A'); ?></td>
-                                <td class="px-6 py-4 <?php echo $isOnline ? 'text-green-600 font-semibold' : 'text-gray-400'; ?> text-xs">
+                                <td class="px-6 py-4">
+                                    <?php if ($isDisabled): ?>
+                                        <span class="bg-red-50 text-red-700 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase border border-red-100">
+                                            Disabled
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase border border-emerald-100">
+                                            Active
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="px-6 py-4 <?php echo ($isOnline || $isActiveToday) ? 'text-green-600 font-semibold' : 'text-gray-400'; ?> text-xs">
                                     <?php echo escape_html($lastActiveLabel); ?>
                                 </td>
-                                <td class="px-6 py-4 text-right space-x-2">
-                                    <button title="Edit Connections" class="p-2 hover:bg-gray-100 text-gray-400 rounded-lg transition">
-                                        <i data-lucide="edit-3" class="w-4 h-4"></i>
-                                    </button>
-                                    <button class="p-2 hover:bg-gray-100 rounded-lg transition"><i data-lucide="more-horizontal" class="w-4 h-4 text-gray-400"></i></button>
+                                <td class="px-6 py-4 text-right">
+                                    <div class="relative inline-block">
+                                        <button type="button" class="action-menu-toggle p-2 hover:bg-gray-100 rounded-lg transition" title="More actions">
+                                            <i data-lucide="more-horizontal" class="w-4 h-4 text-gray-400"></i>
+                                        </button>
+                                        <div class="action-menu hidden absolute right-0 mt-1 w-56 bg-white border border-[#dedede] rounded-lg shadow-lg z-50">
+                                            <button type="button" 
+                                                    class="status-toggle-trigger w-full text-left px-4 py-2 text-sm <?php echo $isDisabled ? 'text-emerald-700 hover:bg-emerald-50' : 'text-red-700 hover:bg-red-50'; ?> transition font-medium"
+                                                    data-user-id="<?php echo (int)($user['user_id'] ?? 0); ?>"
+                                                    data-full-name="<?php echo escape_html($user['full_name'] ?? 'N/A'); ?>"
+                                                    data-action-type="<?php echo $isDisabled ? 'enable' : 'disable'; ?>"
+                                                    data-current-status="<?php echo escape_html($user['status'] ?? ''); ?>">
+                                                <i data-lucide="<?php echo $isDisabled ? 'check-circle' : 'ban'; ?>" class="w-4 h-4 inline-block mr-2"></i>
+                                                <?php echo $isDisabled ? 'Enable Account' : 'Disable Account'; ?>
+                                            </button>
+                                        </div>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -394,8 +522,96 @@ function get_last_active_label($lastActive, $status) {
         </div>
     </div>
 
+    <!-- Status Toggle Confirmation Modal -->
+    <div id="statusToggleModal" class="hidden fixed inset-0 z-[70] items-center justify-center p-4">
+        <div id="modalBackdrop" class="absolute inset-0 bg-black/40 backdrop-blur-xs"></div>
+        <div class="relative z-10 w-full max-w-md bg-white rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.15)] border border-[#ececea] p-6">
+            <h3 id="modalTitle" class="text-base font-bold text-[#262626] mb-2 flex items-center gap-2">
+                <!-- Injected via JS -->
+            </h3>
+            <p id="modalDescription" class="text-xs text-gray-500 mb-6 leading-relaxed">
+                <!-- Injected via JS -->
+            </p>
+            
+            <form id="statusModalForm" method="POST">
+                <input type="hidden" name="user_id" id="modalUserId">
+                <input type="hidden" name="action" value="toggle_status">
+                <input type="hidden" name="current_status" id="modalCurrentStatus">
+                <div class="flex justify-end gap-3">
+                    <button type="button" onclick="closeStatusModal()" class="px-4 py-2 text-xs font-bold border border-[#dedede] rounded-xl hover:bg-gray-50 text-gray-600 transition-all">Cancel</button>
+                    <button type="submit" id="modalConfirmBtn" class="px-4 py-2 text-xs font-bold text-white rounded-xl transition-all shadow-sm">
+                        Confirm
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         lucide.createIcons();
+
+        function openStatusModal(userId, fullName, actionType, currentStatus) {
+            const modal = document.getElementById('statusToggleModal');
+            const title = document.getElementById('modalTitle');
+            const description = document.getElementById('modalDescription');
+            const confirmBtn = document.getElementById('modalConfirmBtn');
+            
+            document.getElementById('modalUserId').value = userId;
+            document.getElementById('modalCurrentStatus').value = currentStatus;
+
+            if (actionType === 'disable') {
+                title.innerHTML = '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Confirm Account Deactivation';
+                description.innerHTML = `Are you sure you want to <b>DISABLE</b> the account for <b>${fullName}</b>? <br><br>The user will be immediately logged out and blocked from accessing the system until their account is re-enabled by an administrator.`;
+                confirmBtn.className = 'px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-xl transition-all shadow-sm';
+                confirmBtn.textContent = 'Confirm Disable';
+            } else {
+                title.innerHTML = '<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Restore Account Access';
+                description.innerHTML = `Are you sure you want to <b>re-enable</b> the account for <b>${fullName}</b>? <br><br>Access will be restored immediately, allowing the user to log back into their dashboard.`;
+                confirmBtn.className = 'px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-all shadow-sm';
+                confirmBtn.textContent = 'Confirm Enable';
+            }
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeStatusModal() {
+            const modal = document.getElementById('statusToggleModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            document.body.style.overflow = '';
+        }
+
+        // Event listener for backdrop
+        document.getElementById('modalBackdrop')?.addEventListener('click', closeStatusModal);
+
+        // Handle clickable action menus
+        document.addEventListener('click', (e) => {
+            const toggle = e.target.closest('.action-menu-toggle');
+            const statusTrigger = e.target.closest('.status-toggle-trigger');
+            const menu = e.target.closest('.action-menu');
+            
+            if (statusTrigger) {
+                const { userId, fullName, actionType, currentStatus } = statusTrigger.dataset;
+                openStatusModal(userId, fullName, actionType, currentStatus);
+                if (menu) menu.classList.add('hidden'); // Close the dropdown menu
+            } else if (toggle) {
+                const targetMenu = toggle.nextElementSibling;
+                // Close all other menus
+                document.querySelectorAll('.action-menu').forEach(m => {
+                    if (m !== targetMenu) m.classList.add('hidden');
+                });
+                targetMenu.classList.toggle('hidden');
+            } else if (!menu) {
+                // Clicked outside, close all open menus
+                document.querySelectorAll('.action-menu').forEach(m => m.classList.add('hidden'));
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeStatusModal();
+        });
     </script>
 </body>
 </html>

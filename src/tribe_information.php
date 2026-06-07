@@ -14,15 +14,23 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 <?php
 
 $displayName = trim((string) ($_SESSION['name'] ?? 'User'));
-if ($displayName === '') {
-    $displayName = 'User';
-}
 
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
+if (is_numeric($displayName) && isset($conn)) {
+    $userPk = (int)($_SESSION['user_id'] ?? 0);
+    $nameRes = $conn->query("SELECT COALESCE(NULLIF(full_name, ''), username, 'Admin User') as real_name FROM users WHERE userid = $userPk OR user_id = $userPk LIMIT 1");
+    if ($nameRes && $row = $nameRes->fetch_assoc()) {
+        $displayName = $row['real_name'];
+        $_SESSION['name'] = $displayName;
+    }
 }
+if ($displayName === '' || is_numeric($displayName)) $displayName = 'Admin User';
+
+$cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+$nameParts = preg_split('/\s+/', trim($cleanName));
+$firstNamePart = $nameParts[0] ?? '';
+$initials = ($firstNamePart !== '') ? strtoupper(substr($firstNamePart, 0, 1)) : 'A';
+$initials .= (count($nameParts) > 1 && end($nameParts) !== '') ? strtoupper(substr(end($nameParts), 0, 1)) : 'U';
+
 
 
 $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
@@ -32,45 +40,67 @@ $roleLabel = 'IP Member';
 if ($currentRole === 'admin') {
     $roleLabel = 'System Admin';
 } elseif ($currentRole === 'tribe_leader') {
-    $roleLabel = 'Tribe Leader';
+    $roleLabel = 'Elder';
 }
 
 
-$sql = "SELECT official_name, designation, term FROM leadership_structure";
-$leader_result = mysqli_query($conn, $sql);
+// --- Dynamic Column Detection for ipmembers ---
+$ipColumns = [];
+$resCols = $conn->query("SHOW COLUMNS FROM ipmembers");
+if ($resCols) { while($c = $resCols->fetch_assoc()) $ipColumns[] = $c['Field']; }
 
+$ipPkCol = first_existing_column($ipColumns, ['ip_member_id', 'id']) ?? 'ip_member_id';
+$ipNameCol = first_existing_column($ipColumns, ['full_name', 'name', 'member_name']);
+
+// --- Dynamic Column Detection for ip_member_details ---
+$detailColumns = [];
+$resD = $conn->query("SHOW COLUMNS FROM ip_member_details");
+if ($resD) { while($c = $resD->fetch_assoc()) $detailColumns[] = $c['Field']; }
+
+if ($ipNameCol) {
+    $ipNameExpr = "i.`{$ipNameCol}`";
+} elseif (in_array('first_name', $ipColumns) && in_array('last_name', $ipColumns)) {
+    $ipNameExpr = "TRIM(CONCAT_WS(' ', i.first_name, i.middle_name, i.last_name))";
+} else {
+    $ipNameExpr = "'Unknown Member'";
+}
+
+$tribeClanCol = first_existing_column($ipColumns, ['tribe_clan', 'tribe', 'tribe_id']);
+$barangayCol = first_existing_column($ipColumns, ['barangay', 'location']) ?? 'barangay';
+$regDateCol = first_existing_column($ipColumns, ['registration_date', 'created_at']) ?? $ipPkCol;
+
+// Determine how to count population based on where the tribe reference is stored
+if ($tribeClanCol) {
+    $popJoin = "LEFT JOIN ipmembers i ON t.tribe_id = i.`{$tribeClanCol}`";
+} else {
+    // Join via details table if tribe ID isn't in main ipmembers table
+    $detailTribeCol = first_existing_column($detailColumns, ['tribe', 'tribe_id', 'tribe_clan']) ?? 'tribe';
+    $popJoin = "LEFT JOIN ip_member_details d ON t.tribe_id = d.`{$detailTribeCol}` 
+                LEFT JOIN ipmembers i ON d.ip_member_id = i.`{$ipPkCol}`";
+}
 
 $ipmembers = [];
-
-$sql = "SELECT
-            TRIM(CONCAT_WS(' ', first_name, middle_name, last_name)) AS member_name,
-            ip_member_id,
-            member_id,
-            tribe_clan,
-            barangay,
-            registration_date
-        FROM ipmembers";
+$sql = "SELECT {$ipNameExpr} AS member_name, i.{$ipPkCol}, " . ($tribeClanCol ? "i.{$tribeClanCol}" : "NULL") . " AS tribe_clan, i.{$barangayCol}, i.{$regDateCol} FROM ipmembers i";
 $ip_result = mysqli_query($conn, $sql);
 
-if ($ip_result) {
+if ($ip_result instanceof mysqli_result) {
     while ($row = mysqli_fetch_assoc($ip_result)) {
         $ipmembers[] = $row;
     }
 }
 
-
 $sql = "SELECT 
     t.tribe_id,
     t.tribe_name,
     t.language,
-    COUNT(i.member_id) AS population,
+    COUNT(i.{$ipPkCol}) AS population,
     t.location
 FROM tribes t
-LEFT JOIN ipmembers i ON t.tribe_id = i.tribe_clan
+{$popJoin}
 GROUP BY t.tribe_id";
 
 $result = mysqli_query($conn, $sql);
-$tribeRow = mysqli_fetch_assoc($result) ?: [];
+$tribeRow = ($result instanceof mysqli_result) ? mysqli_fetch_assoc($result) : [];
 
 $traditionsRituals = '';
 $artsCrafts = '';
@@ -81,6 +111,10 @@ $tribeName = trim((string) ($tribeRow['tribe_name'] ?? ''));
 $tribeLanguage = trim((string) ($tribeRow['language'] ?? ''));
 $tribePopulation = (int) ($tribeRow['population'] ?? 0);
 $tribeLocation = trim((string) ($tribeRow['location'] ?? ''));
+
+// Fetch leadership structure for the specific tribe being viewed
+$leader_sql = "SELECT official_name, designation, term FROM leadership_structure WHERE tribe_id = $tribeId";
+$leader_result = mysqli_query($conn, $leader_sql);
 
 if ($tribeId > 0) {
     $infoSql = "SELECT traditions_rituals, arts_crafts, historical_background

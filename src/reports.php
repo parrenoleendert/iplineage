@@ -12,25 +12,67 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 
 $currentRole = normalize_role((string) ($_SESSION['role'] ?? ''));
 $displayName = trim((string) ($_SESSION['name'] ?? 'User'));
-if ($displayName === '') { $displayName = 'User'; }
 
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
+if (is_numeric($displayName) && isset($conn)) {
+    $userPk = (int)($_SESSION['user_id'] ?? 0);
+    $nameRes = $conn->query("SELECT COALESCE(NULLIF(full_name, ''), username, 'Admin User') as real_name FROM users WHERE userid = $userPk OR user_id = $userPk LIMIT 1");
+    if ($nameRes && $row = $nameRes->fetch_assoc()) {
+        $displayName = $row['real_name'];
+        $_SESSION['name'] = $displayName;
+    }
 }
+if ($displayName === '' || is_numeric($displayName)) $displayName = 'Admin User';
+
+$cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+$nameParts = preg_split('/\s+/', trim($cleanName));
+$firstNamePart = $nameParts[0] ?? '';
+$initials = ($firstNamePart !== '') ? strtoupper(substr($firstNamePart, 0, 1)) : 'A';
+$initials .= (count($nameParts) > 1 && end($nameParts) !== '') ? strtoupper(substr(end($nameParts), 0, 1)) : 'U';
+
 
 $roleLabel = 'IP Member';
 if ($currentRole === 'admin') {
     $roleLabel = 'System Admin';
 } elseif ($currentRole === 'tribe_leader') {
-    $roleLabel = 'Tribe Leader';
+    $roleLabel = 'Elder';
 }
+
+// --- DYNAMIC COLUMN DETECTION ---
+$ipColumns = [];
+$resC = $conn->query("SHOW COLUMNS FROM ipmembers");
+if ($resC) { while($c = $resC->fetch_assoc()) $ipColumns[] = $c['Field']; }
+
+$detailColumns = [];
+$resD = $conn->query("SHOW COLUMNS FROM ip_member_details");
+if ($resD) { while($c = $resD->fetch_assoc()) $detailColumns[] = $c['Field']; }
+
+$userColumns = [];
+$resU = $conn->query("SHOW COLUMNS FROM users");
+if ($resU) { while($c = $resU->fetch_assoc()) $userColumns[] = $c['Field']; }
+
+$ipPkCol = first_existing_column($ipColumns, ['ip_member_id', 'id']) ?? 'ip_member_id';
+$userPkCol = first_existing_column($userColumns, ['userid', 'user_id', 'id']) ?? 'userid';
+$ipNameCol = first_existing_column($ipColumns, ['full_name', 'member_name', 'name']) ?? 'id';
+$ipLastNameCol = first_existing_column($ipColumns, ['last_name', 'surname']);
+
+$sexExpr = ($c = first_existing_column($ipColumns, ['sex', 'gender'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['sex', 'gender', 'gender_sex'])) ? "d.`$c`" : (($c = first_existing_column($userColumns, ['sex', 'gender'])) ? "u.`$c`" : "NULL"));
+$birthExpr = ($c = first_existing_column($ipColumns, ['birthdate', 'date_of_birth'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['birthdate', 'date_of_birth'])) ? "d.`$c`" : "NULL");
+$barangayExpr = ($c = first_existing_column($ipColumns, ['barangay', 'location'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['barangay', 'location'])) ? "d.`$c`" : "NULL");
+$tribeExpr = ($c = first_existing_column($ipColumns, ['tribe_clan', 'tribe', 'tribe_id'])) ? "i.`$c`" : (($c = first_existing_column($detailColumns, ['tribe', 'tribe_clan', 'tribe_id'])) ? "d.`$c`" : "NULL");
+$regDateExpr = ($c = first_existing_column($ipColumns, ['registration_date', 'created_at', 'date_registered'])) ? "i.`$c`" : "i.`$ipPkCol`";
+
+// Safe Age Calculation Expression: Use reg date if birthdate is null
+$ageCalcExpr = ($birthExpr === 'NULL') ? $regDateExpr : $birthExpr;
+
+$fromClause = "FROM ipmembers i 
+               LEFT JOIN ip_member_details d ON i.`{$ipPkCol}` = d.ip_member_id
+               LEFT JOIN users u ON i.user_id = u.{$userPkCol}";
 
 // --- GET MULTI-FILTER PARAMETERS ---
 $selectedBarangay = isset($_GET['barangay']) ? trim($_GET['barangay']) : '';
 $selectedTribe = isset($_GET['tribe']) ? trim($_GET['tribe']) : '';
-$selectedSex = isset($_GET['sex']) ? trim($_GET['sex']) : '';
+$selectedRegStatus = isset($_GET['reg_status']) ? trim($_GET['reg_status']) : '';
+$selectedGender = isset($_GET['gender']) ? trim($_GET['gender']) : '';
 $selectedAge = isset($_GET['age_group']) ? trim($_GET['age_group']) : '';
 $selectedEducation = isset($_GET['education']) ? trim($_GET['education']) : '';
 $startDate = isset($_GET['start_date']) ? trim($_GET['start_date']) : '';
@@ -40,25 +82,30 @@ $endDate = isset($_GET['end_date']) ? trim($_GET['end_date']) : '';
 $filterConditions = [];
 
 if ($selectedBarangay !== '') {
-    $filterConditions[] = "barangay = '" . mysqli_real_escape_string($conn, $selectedBarangay) . "'";
+    $filterConditions[] = "{$barangayExpr} = '" . mysqli_real_escape_string($conn, $selectedBarangay) . "'";
 }
 if ($selectedTribe !== '') {
-    $filterConditions[] = "tribe_clan = " . (int)$selectedTribe;
+    $filterConditions[] = "{$tribeExpr} = " . (int)$selectedTribe;
 }
-if ($selectedSex !== '') {
-    $filterConditions[] = "sex = '" . mysqli_real_escape_string($conn, $selectedSex) . "'";
+if ($selectedRegStatus === 'registered') {
+    $filterConditions[] = "i.user_id IS NOT NULL";
+} elseif ($selectedRegStatus === 'unregistered') {
+    $filterConditions[] = "i.user_id IS NULL";
+}
+if ($selectedGender !== '') {
+    $filterConditions[] = "{$sexExpr} = '" . mysqli_real_escape_string($conn, $selectedGender) . "'";
 }
 if ($startDate !== '' && $endDate !== '') {
-    $filterConditions[] = "registration_date BETWEEN '" . mysqli_real_escape_string($conn, $startDate) . "' AND '" . mysqli_real_escape_string($conn, $endDate) . "'";
+    $filterConditions[] = "{$regDateExpr} BETWEEN '" . mysqli_real_escape_string($conn, $startDate) . "' AND '" . mysqli_real_escape_string($conn, $endDate) . "'";
 }
 
 if ($selectedAge !== '') {
     switch ($selectedAge) {
-        case '0-5':   $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 0 AND 5"; break;
-        case '6-12':  $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 6 AND 12"; break;
-        case '13-19': $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 13 AND 19"; break;
-        case '20-59': $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 20 AND 59"; break;
-        case '60+':   $filterConditions[] = "TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) >= 60"; break;
+        case '0-5':   $filterConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 0 AND 5"; break;
+        case '6-12':  $filterConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 6 AND 12"; break;
+        case '13-19': $filterConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 13 AND 19"; break;
+        case '20-59': $filterConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 20 AND 59"; break;
+        case '60+':   $filterConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) >= 60"; break;
     }
 }
 
@@ -67,27 +114,25 @@ $whereClause = !empty($filterConditions) ? " WHERE " . implode(" AND ", $filterC
 // --- EXECUTE SQL ANALYTICS ---
 
 // 1. Total Filtered IP Members (Accepted Users)
-$activeCountQuery = "SELECT COUNT(*) as total FROM ipmembers" . $whereClause;
+$activeCountQuery = "SELECT COUNT(*) as total $fromClause " . $whereClause;
 $activeCountResult = mysqli_query($conn, $activeCountQuery);
 $totalActiveMembers = $activeCountResult ? (int)(mysqli_fetch_assoc($activeCountResult)['total'] ?? 0) : 0;
 
 // 2. Status Tracking & Pending Profiles Aggregation
-$pendingBarangay = 0;
 $pendingElder = 0;
+$pendingAdmin = 0;
 
-$appsQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'pending'";
-$appsResult = mysqli_query($conn, $appsQuery);
-if ($appsResult) { $pendingElder = (int)(mysqli_fetch_assoc($appsResult)['total'] ?? 0); }
-
-$approvalsQuery = "SELECT COUNT(*) as total FROM pending_approvals WHERE approval_status = 'pending_approval'";
-$approvalsResult = mysqli_query($conn, $approvalsQuery);
-if ($approvalsResult) { $pendingBarangay = (int)(mysqli_fetch_assoc($approvalsResult)['total'] ?? 0); }
-
-$totalPendingProfiles = $pendingBarangay + $pendingElder;
+$pendingElderQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'pending_elder'";
+$pendingElderResult = mysqli_query($conn, $pendingElderQuery);
+if ($pendingElderResult) { $pendingElder = (int)(mysqli_fetch_assoc($pendingElderResult)['total'] ?? 0); }
+$pendingAdminQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'pending_admin'";
+$pendingAdminResult = mysqli_query($conn, $pendingAdminQuery);
+if ($pendingAdminResult) { $pendingAdmin = (int)(mysqli_fetch_assoc($pendingAdminResult)['total'] ?? 0); }
+$totalPendingProfiles = $pendingElder + $pendingAdmin;
 
 // 3. Rejected Users Dynamic Analytical Fetch
 $totalRejectedUsers = 0;
-$rejectedQuery = "SELECT COUNT(*) as total FROM pending_approvals WHERE approval_status = 'rejected'";
+$rejectedQuery = "SELECT COUNT(*) as total FROM applications WHERE status = 'rejected'";
 $rejectedResult = mysqli_query($conn, $rejectedQuery);
 if ($rejectedResult) {
     $totalRejectedUsers = (int)(mysqli_fetch_assoc($rejectedResult)['total'] ?? 0);
@@ -95,12 +140,15 @@ if ($rejectedResult) {
 
 // 4. Sex Breakdown Distribution Matrix
 $sexData = ['Male' => 0, 'Female' => 0]; 
-$sexQuery = "SELECT sex, COUNT(*) as count FROM ipmembers" . $whereClause . " GROUP BY sex";
+$sexQuery = "SELECT {$sexExpr} as sex, COUNT(*) as count $fromClause " . $whereClause . " GROUP BY sex";
 $sexResult = mysqli_query($conn, $sexQuery);
 if ($sexResult) {
     while($row = mysqli_fetch_assoc($sexResult)) {
-        if ($row['sex'] === 'Male' || $row['sex'] === 'Female') {
-            $sexData[$row['sex']] = (int)$row['count'];
+        $s = strtolower(trim((string)$row['sex']));
+        if ($s === 'male' || $s === 'm') {
+            $sexData['Male'] += (int)$row['count'];
+        } elseif ($s === 'female' || $s === 'f') {
+            $sexData['Female'] += (int)$row['count'];
         }
     }
 }
@@ -108,12 +156,12 @@ if ($sexResult) {
 // 5. Dynamic Age Demographics Metrics Map
 $ageGroups = ['0-5' => 0, '6-12' => 0, '13-19' => 0, '20-59' => 0, '60+' => 0];
 $ageQuery = "SELECT 
-    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 0 AND 5 THEN 1 ELSE 0 END) as g1,
-    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 6 AND 12 THEN 1 ELSE 0 END) as g2,
-    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 13 AND 19 THEN 1 ELSE 0 END) as g3,
-    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) BETWEEN 20 AND 59 THEN 1 ELSE 0 END) as g4,
-    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, birthdate, CURDATE()) >= 60 THEN 1 ELSE 0 END) as g5
-    FROM ipmembers" . $whereClause;
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 0 AND 5 THEN 1 ELSE 0 END) as g1,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 6 AND 12 THEN 1 ELSE 0 END) as g2,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 13 AND 19 THEN 1 ELSE 0 END) as g3,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 20 AND 59 THEN 1 ELSE 0 END) as g4,
+    SUM(CASE WHEN TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) >= 60 THEN 1 ELSE 0 END) as g5
+    $fromClause " . $whereClause;
 $ageResult = mysqli_query($conn, $ageQuery);
 if ($ageResult && $row = mysqli_fetch_assoc($ageResult)) {
     $ageGroups = [
@@ -127,55 +175,87 @@ if ($ageResult && $row = mysqli_fetch_assoc($ageResult)) {
 
 // 6. Clan Lineage Distribution
 $clanList = [];
-$clanJoinConditions = ["i.last_name LIKE CONCAT('%', REPLACE(f.family_name, ' Family', ''), '%')"];
+$clanNameSource = $ipLastNameCol ? "i.`$ipLastNameCol`" : ($ipNameCol ? "i.`$ipNameCol`" : "''");
+
+// Use suffix matching to handle compound surnames like 'Dela Cruz' from full_name if necessary
+if ($ipLastNameCol) {
+    $matchCondition = "i.`{$ipLastNameCol}` = REPLACE(f.family_name, ' Family', '')";
+} else {
+    $matchCondition = "i.`{$ipNameCol}` LIKE CONCAT('%', REPLACE(f.family_name, ' Family', ''))";
+}
+
+$clanJoinConditions = [$matchCondition];
 if ($selectedBarangay !== '') {
-    $clanJoinConditions[] = "i.barangay = '" . mysqli_real_escape_string($conn, $selectedBarangay) . "'";
+    $clanJoinConditions[] = "{$barangayExpr} = '" . mysqli_real_escape_string($conn, $selectedBarangay) . "'";
 }
 if ($selectedTribe !== '') {
-    $clanJoinConditions[] = "i.tribe_clan = " . (int)$selectedTribe;
+    $clanJoinConditions[] = "{$tribeExpr} = " . (int)$selectedTribe;
 }
-if ($selectedSex !== '') {
-    $clanJoinConditions[] = "i.sex = '" . mysqli_real_escape_string($conn, $selectedSex) . "'";
+if ($selectedRegStatus === 'registered') {
+    $clanJoinConditions[] = "i.user_id IS NOT NULL";
+} elseif ($selectedRegStatus === 'unregistered') {
+    $clanJoinConditions[] = "i.user_id IS NULL";
+}
+if ($selectedGender !== '') {
+    $clanJoinConditions[] = "{$sexExpr} = '" . mysqli_real_escape_string($conn, $selectedGender) . "'";
 }
 if ($startDate !== '' && $endDate !== '') {
-    $clanJoinConditions[] = "i.registration_date BETWEEN '" . mysqli_real_escape_string($conn, $startDate) . "' AND '" . mysqli_real_escape_string($conn, $endDate) . "'";
+    $clanJoinConditions[] = "{$regDateExpr} BETWEEN '" . mysqli_real_escape_string($conn, $startDate) . "' AND '" . mysqli_real_escape_string($conn, $endDate) . "'";
 }
 if ($selectedAge !== '') {
     switch ($selectedAge) {
-        case '0-5':
-            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 0 AND 5";
-            break;
-        case '6-12':
-            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 6 AND 12";
-            break;
-        case '13-19':
-            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 13 AND 19";
-            break;
-        case '20-59':
-            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) BETWEEN 20 AND 59";
-            break;
-        case '60+':
-            $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, i.birthdate, CURDATE()) >= 60";
-            break;
+        case '0-5':   $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 0 AND 5"; break;
+        case '6-12':  $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 6 AND 12"; break;
+        case '13-19': $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 13 AND 19"; break;
+        case '20-59': $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) BETWEEN 20 AND 59"; break;
+        case '60+':   $clanJoinConditions[] = "TIMESTAMPDIFF(YEAR, {$ageCalcExpr}, CURDATE()) >= 60"; break;
     }
 }
 
 $clanQuery = "SELECT f.family_name, COUNT(i.ip_member_id) as count 
               FROM families f 
               LEFT JOIN ipmembers i ON " . implode(" AND ", $clanJoinConditions) . "
+              LEFT JOIN ip_member_details d ON i.`{$ipPkCol}` = d.ip_member_id
+              LEFT JOIN users u ON i.user_id = u.{$userPkCol}
               GROUP BY f.family_id LIMIT 6";
 $clanResult = mysqli_query($conn, $clanQuery);
 if ($clanResult && mysqli_num_rows($clanResult) > 0) {
     while($row = mysqli_fetch_assoc($clanResult)) { $clanList[] = $row; }
 } else {
-    $clanList[] = ['family_name' => 'Parreño Family', 'count' => $totalActiveMembers];
+    // Dynamic Fallback: If families table is empty, group by detected last name/word
+    if ($ipLastNameCol) {
+        $topSurQuery = "SELECT i.`{$ipLastNameCol}` as family_name, COUNT(*) as count $fromClause $whereClause GROUP BY family_name ORDER BY count DESC LIMIT 6";
+    } else {
+        $topSurQuery = "SELECT SUBSTRING_INDEX(i.`{$ipNameCol}`, ' ', -1) as family_name, COUNT(*) as count $fromClause $whereClause GROUP BY family_name ORDER BY count DESC LIMIT 6";
+    }
+    $surRes = mysqli_query($conn, $topSurQuery);
+    if ($surRes) {
+        while($sRow = mysqli_fetch_assoc($surRes)) {
+            $n = trim((string)$sRow['family_name']);
+            if ($n !== '') {
+                $clanList[] = ['family_name' => $n . ' Family', 'count' => (int)$sRow['count']];
+            }
+        }
+    }
 }
 
 // 7. Educational Attainment Metrics Matrix
-$eduData = ['None' => 0, 'Elementary' => 2, 'High School' => 3, 'College' => 4, 'Postgraduate' => 1];
-if ($selectedEducation !== '' && isset($eduData[$selectedEducation])) {
-    foreach ($eduData as $key => $val) {
-        if ($key !== $selectedEducation) $eduData[$key] = 0;
+$eduData = ['None' => 0, 'Elementary' => 0, 'High School' => 0, 'College' => 0, 'Postgraduate' => 0];
+$eduQuery = "SELECT d.educational_attainment as edu, COUNT(*) as count 
+             $fromClause 
+             $whereClause 
+             GROUP BY edu";
+$eduRes = mysqli_query($conn, $eduQuery);
+if ($eduRes) {
+    while ($eRow = mysqli_fetch_assoc($eduRes)) {
+        $e = strtolower(trim((string)$eRow['edu']));
+        if ($e === '') continue;
+        
+        if (strpos($e, 'elementary') !== false) $eduData['Elementary'] += (int)$eRow['count'];
+        elseif (strpos($e, 'high') !== false) $eduData['High School'] += (int)$eRow['count'];
+        elseif (strpos($e, 'college') !== false) $eduData['College'] += (int)$eRow['count'];
+        elseif (strpos($e, 'post') !== false || strpos($e, 'grad') !== false) $eduData['Postgraduate'] += (int)$eRow['count'];
+        elseif ($e !== 'none') $eduData['None'] += (int)$eRow['count'];
     }
 }
 
@@ -192,10 +272,10 @@ for ($i = 5; $i >= 0; $i--) {
     $monthMap[$monthKey] = count($monthMap);
 }
 
-$regTrendSql = "SELECT DATE_FORMAT(registration_date, '%Y-%m') AS month_key, COUNT(*) AS total 
-                FROM ipmembers 
-                " . ($whereClause !== '' ? $whereClause . " AND " : " WHERE ") . " registration_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) 
-                GROUP BY DATE_FORMAT(registration_date, '%Y-%m')";
+$regTrendSql = "SELECT DATE_FORMAT({$regDateExpr}, '%Y-%m') AS month_key, COUNT(*) AS total 
+                $fromClause 
+                " . ($whereClause !== '' ? $whereClause . " AND " : " WHERE ") . " {$regDateExpr} >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) 
+                GROUP BY month_key";
 $regTrendResult = mysqli_query($conn, $regTrendSql);
 if ($regTrendResult) {
     while ($tRow = mysqli_fetch_assoc($regTrendResult)) {
@@ -275,10 +355,16 @@ if ($regTrendResult) {
                         <option value="1" <?php echo $selectedTribe === '1' ? 'selected' : ''; ?>>Ati Tribe</option>
                     </select>
 
-                    <select name="sex" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
-                        <option value="">All Sexes</option>
-                        <option value="Male" <?php echo $selectedSex === 'Male' ? 'selected' : ''; ?>>Male</option>
-                        <option value="Female" <?php echo $selectedSex === 'Female' ? 'selected' : ''; ?>>Female</option>
+                    <select name="reg_status" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Status</option>
+                        <option value="registered" <?php echo $selectedRegStatus === 'registered' ? 'selected' : ''; ?>>Registered</option>
+                        <option value="unregistered" <?php echo $selectedRegStatus === 'unregistered' ? 'selected' : ''; ?>>Not Registered</option>
+                    </select>
+
+                    <select name="gender" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">
+                        <option value="">All Genders</option>
+                        <option value="Male" <?php echo $selectedGender === 'Male' ? 'selected' : ''; ?>>Male</option>
+                        <option value="Female" <?php echo $selectedGender === 'Female' ? 'selected' : ''; ?>>Female</option>
                     </select>
 
                     <select name="age_group" onchange="this.form.submit()" class="bg-white border border-neutral-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-neutral-600 outline-none focus:border-neutral-400 transition">

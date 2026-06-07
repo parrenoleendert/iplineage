@@ -14,14 +14,104 @@ function get_table_columns($conn, $tableName) {
     return $columns;
 }
 
-function first_existing_column($columns, $candidates) {
-    foreach ($candidates as $candidate) {
-        if (in_array($candidate, $columns, true)) {
-            return $candidate;
+if (!function_exists('first_existing_column')) {
+    function first_existing_column($columns, $candidates) {
+        foreach ($candidates as $candidate) {
+            if (in_array($candidate, $columns, true)) {
+                return $candidate;
+            }
         }
-    }
 
-    return null;
+        return null;
+    }
+}
+
+/**
+ * Finds or creates a member by their full name.
+ */
+function upsert_member_by_full_name(mysqli $conn, string $fullName, string $sex = 'U', string $birthdate = ''): int {
+    $fullName = mb_convert_case(trim($fullName), MB_CASE_TITLE, "UTF-8");
+    if ($fullName === '') return 0;
+
+    $cols = get_table_columns($conn, 'ipmembers');
+    $pkCol = first_existing_column($cols, ['ip_member_id', 'id', 'member_id']) ?? 'ip_member_id';
+    $nameCol = first_existing_column($cols, ['full_name', 'name', 'member_name']) ?? 'full_name';
+
+    // Match by name AND birthdate if provided to ensure unique "ghost" records
+    $sql = "SELECT i.`{$pkCol}` FROM ipmembers i 
+            LEFT JOIN ip_member_details d ON i.`{$pkCol}` = d.ip_member_id 
+            WHERE i.`{$nameCol}` = ?";
+    
+    $detailCols = get_table_columns($conn, 'ip_member_details');
+    $dobCol = first_existing_column($detailCols, ['date_of_birth', 'birthdate']) ?? 'date_of_birth';
+
+    if ($birthdate !== '') { $sql .= " AND d.`{$dobCol}` = ?"; }
+
+    $stmt = $conn->prepare($sql . " LIMIT 1");
+    if (!$stmt) return 0;
+    
+    if ($birthdate !== '') $stmt->bind_param('ss', $fullName, $birthdate);
+    else $stmt->bind_param('s', $fullName);
+    
+    $stmt->execute();
+    $res = $stmt->get_result();
+    $row = $res->fetch_assoc();
+    $stmt->close();
+
+    if ($row) return (int)$row[$pkCol];
+
+    // Only insert the name into the main ipmembers table
+    $insertStmt = $conn->prepare("INSERT INTO ipmembers (`{$nameCol}`) VALUES (?)");
+    if (!$insertStmt) return 0;
+    $insertStmt->bind_param('s', $fullName);
+    if ($insertStmt->execute()) {
+        $id = (int)$conn->insert_id;
+        $insertStmt->close();
+        
+        // Detect columns for details table
+        $sexDetailCol = first_existing_column($detailCols, ['sex', 'gender']) ?? 'sex';
+        
+        // Check if details record already exists (safety)
+        $checkDetail = $conn->query("SELECT 1 FROM ip_member_details WHERE ip_member_id = $id");
+        if ($checkDetail && $checkDetail->num_rows === 0) {
+            // Initialize details with birthdate for future matching/merging
+            $detailSql = "INSERT INTO ip_member_details (ip_member_id, `{$sexDetailCol}`, `{$dobCol}`) VALUES (?, ?, ?)";
+        $dStmt = $conn->prepare($detailSql);
+        if ($dStmt) {
+            $dStmt->bind_param('iss', $id, $sex, $birthdate);
+            $dStmt->execute();
+            $dStmt->close();
+            }
+        }
+        return $id;
+    }
+    $insertStmt->close();
+    return 0;
+}
+
+/**
+ * Links two people with a parent-child relationship.
+ */
+function link_person_relation(mysqli $conn, int $childId, int $parentId, string $type): bool {
+    if ($childId <= 0 || $parentId <= 0) return false;
+
+    $cols = get_table_columns($conn, 'relationships');
+    $srcCol = first_existing_column($cols, ['person_id', 'ip_member_id', 'member_id']) ?? 'person_id';
+    $targetCol = first_existing_column($cols, ['related_person_id', 'related_member_id', 'relative_id']) ?? 'related_person_id';
+    $typeCol = first_existing_column($cols, ['relationship_type', 'type']) ?? 'relationship_type';
+
+    $check = $conn->prepare("SELECT 1 FROM relationships WHERE `{$srcCol}` = ? AND `{$targetCol}` = ? AND `{$typeCol}` = ?");
+    $check->bind_param('iis', $childId, $parentId, $type);
+    $check->execute();
+    if ($check->get_result()->num_rows > 0) { $check->close(); return true; }
+    $check->close();
+
+    $stmt = $conn->prepare("INSERT INTO relationships (`{$srcCol}`, `{$targetCol}`, `{$typeCol}`) VALUES (?, ?, ?)");
+    if (!$stmt) return false;
+    $stmt->bind_param('iis', $childId, $parentId, $type);
+    $result = $stmt->execute();
+    $stmt->close();
+    return $result;
 }
 
 function ensure_relationship_bucket(&$relationships, $id) {
@@ -123,6 +213,17 @@ function filter_connected_family_component($members, $relationships, $selectedMe
 
 function build_family_chart_data($members, $relationships, $selectedMemberId) {
     $familyData = [];
+    $conn = $GLOBALS['conn'];
+
+    // Map ip_member_ids to their active pending request IDs
+    $proposalMap = [];
+    // Order by ID ASC so that the latest request for a ghost record overwrites older ones in the map
+    $propRes = $conn->query("SELECT request_id, ghost_ip_id, status, rejection_remarks FROM lineage_requests ORDER BY request_id ASC");
+    if ($propRes) {
+        while($p = $propRes->fetch_assoc()) {
+            $proposalMap[$p['ghost_ip_id']] = $p;
+        }
+    }
 
     foreach ($members as $id => $member) {
         $fullName = trim(implode(' ', array_filter([
@@ -153,6 +254,13 @@ function build_family_chart_data($members, $relationships, $selectedMemberId) {
             return isset($members[(string) $relId]);
         }));
 
+        // Robust Status Detection:
+        // 1. Use status from lineage_requests if it exists.
+        // 2. If no request exists, Registered Users (with user_id) are 'approved'.
+        // 3. Unregistered ghosts without a request default to 'pending' to require Elder review.
+        $isRegistered = !empty($member['user_id']);
+        $detectedStatus = $proposalMap[$id]['status'] ?? ($isRegistered ? 'approved' : 'pending');
+
         $familyData[] = [
             'id' => (string) $id,
             'data' => [
@@ -161,7 +269,13 @@ function build_family_chart_data($members, $relationships, $selectedMemberId) {
                 'birthdate' => $member['birthdate'] ?? '',
                 'avatar' => '',
                 'gender' => strtoupper((string) ($member['sex'] ?? 'U')),
-                'display_id' => $member['display_id'] ?? (string) $id
+                'is_ghost' => empty($member['user_id']),
+                'display_id' => $member['display_id'] ?? null,
+                // Add verification metadata for the UI
+                'request_id' => $proposalMap[$id]['request_id'] ?? null,
+                'request_status' => $detectedStatus,
+                'is_verified' => $detectedStatus === 'approved',
+                'rejection_remarks' => $proposalMap[$id]['rejection_remarks'] ?? ''
             ],
             'rels' => [
                 'parents' => $parents,
@@ -186,18 +300,24 @@ function build_family_chart_data($members, $relationships, $selectedMemberId) {
     return $familyData;
 }
 
-function build_family_lineage_payload($conn, $requestedMemberId = '') {
+function build_family_lineage_payload($conn, $requestedMemberId = '', $forceWholeTree = false) {
     $ipMemberColumns = get_table_columns($conn, 'ipmembers');
     $relationshipColumns = get_table_columns($conn, 'relationships');
+    $detailColumns = get_table_columns($conn, 'ip_member_details');
 
     $memberIdColumn = first_existing_column($ipMemberColumns, ['ip_member_id', 'member_id', 'id']);
-    $displayIdColumn = first_existing_column($ipMemberColumns, ['member_id', 'ip_member_id']);
+    $displayIdColumn = first_existing_column($ipMemberColumns, ['display_id', 'member_id', 'ip_member_id']);
     $firstNameColumn = first_existing_column($ipMemberColumns, ['first_name']);
     $middleNameColumn = first_existing_column($ipMemberColumns, ['middle_name']);
     $lastNameColumn = first_existing_column($ipMemberColumns, ['last_name']);
     $legacyNameColumn = first_existing_column($ipMemberColumns, ['member_name', 'full_name', 'name']);
-    $sexColumn = first_existing_column($ipMemberColumns, ['sex', 'gender']);
-    $dateColumn = first_existing_column($ipMemberColumns, ['birthdate']);
+    
+    // Detect sex and birthdate from both potential sources
+    $sexColIp = first_existing_column($ipMemberColumns, ['sex', 'gender']);
+    $sexColDet = first_existing_column($detailColumns, ['sex', 'gender']);
+    
+    $dobColIp = first_existing_column($ipMemberColumns, ['birthdate', 'date_of_birth']);
+    $dobColDet = first_existing_column($detailColumns, ['date_of_birth', 'birthdate']);
 
     $relMemberColumn = first_existing_column($relationshipColumns, ['ip_member_id', 'member_id', 'person_id']);
     $relRelatedColumn = first_existing_column($relationshipColumns, ['related_person_id', 'related_member_id', 'relative_id']);
@@ -211,12 +331,8 @@ function build_family_lineage_payload($conn, $requestedMemberId = '') {
         throw new RuntimeException('SQL Error: Could not find required columns in relationships table.');
     }
 
-    $memberSelect = ["`{$memberIdColumn}` AS member_key"];
-    if ($displayIdColumn !== null && $displayIdColumn !== $memberIdColumn) {
-        $memberSelect[] = "`{$displayIdColumn}` AS display_id";
-    } else if ($displayIdColumn !== null) {
-        $memberSelect[] = 'null AS display_id';
-    }
+    $memberSelect = ["i.`{$memberIdColumn}` AS member_key", "i.user_id", ($displayIdColumn ? "i.`{$displayIdColumn}`" : "NULL") . " AS display_id"];
+
     if ($firstNameColumn !== null) {
         $memberSelect[] = "`{$firstNameColumn}` AS first_name";
     }
@@ -229,14 +345,15 @@ function build_family_lineage_payload($conn, $requestedMemberId = '') {
     if ($legacyNameColumn !== null) {
         $memberSelect[] = "`{$legacyNameColumn}` AS legacy_name";
     }
-    if ($sexColumn !== null) {
-        $memberSelect[] = "`{$sexColumn}` AS sex";
-    }
-    if ($dateColumn !== null) {
-        $memberSelect[] = "`{$dateColumn}` AS birthdate";
-    }
 
-    $sqlMembers = 'SELECT ' . implode(', ', $memberSelect) . ' FROM ipmembers';
+    // Build robust expressions to pull from details table if main table is empty
+    $sexExpr = "COALESCE(" . ($sexColIp ? "i.`$sexColIp`" : "NULL") . ", " . ($sexColDet ? "d.`$sexColDet`" : "NULL") . ", 'U') AS sex";
+    $dobExpr = "COALESCE(" . ($dobColIp ? "i.`$dobColIp`" : "NULL") . ", " . ($dobColDet ? "d.`$dobColDet`" : "NULL") . ") AS birthdate";
+    
+    $memberSelect[] = $sexExpr;
+    $memberSelect[] = $dobExpr;
+
+    $sqlMembers = 'SELECT ' . implode(', ', $memberSelect) . " FROM ipmembers i LEFT JOIN ip_member_details d ON i.`$memberIdColumn` = d.ip_member_id";
     $resultMembers = $conn->query($sqlMembers);
 
     if (!$resultMembers) {
@@ -282,7 +399,9 @@ function build_family_lineage_payload($conn, $requestedMemberId = '') {
 
     $selectedMemberId = resolve_selected_member_id($members, (string) $requestedMemberId);
 
-    list($members, $relationships) = filter_connected_family_component($members, $relationships, $selectedMemberId);
+    if (!$forceWholeTree) {
+        list($members, $relationships) = filter_connected_family_component($members, $relationships, $selectedMemberId);
+    }
 
     $familyData = build_family_chart_data($members, $relationships, $selectedMemberId);
 

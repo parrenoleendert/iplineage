@@ -32,11 +32,13 @@ $email = trim((string) ($_SESSION['email'] ?? ''));
 $sessionRole = strtolower(trim((string) ($_SESSION['role'] ?? 'ip_member')));
 $userId = (int) ($_SESSION['user_id'] ?? 0);
 
+touch_user_activity($userId);
+
 $roleLabel = 'IP Member';
 if ($sessionRole === 'admin') {
     $roleLabel = 'System Admin';
 } elseif ($sessionRole === 'tribe_leader') {
-    $roleLabel = 'Tribe Leader';
+    $roleLabel = 'Elder';
 }
 
 $jurisdiction = '';
@@ -45,6 +47,10 @@ $lastActive = 'N/A';
 $firstName = '';
 $middleName = '';
 $lastName = '';
+$currentMemberKey = '';
+$contactNumber = 'N/A';
+$barangayOnly = 'N/A';
+$currentAddress = 'N/A';
 $familyParents = [];
 $familySpouses = [];
 $familyChildren = [];
@@ -60,16 +66,17 @@ if ($columnResult instanceof mysqli_result) {
     }
 }
 
-$idColumn = first_existing_column($userColumns, ['user_id', 'id']);
-$nameColumn = first_existing_column($userColumns, ['full_name', 'name']);
+$idColumn = first_existing_column($userColumns, ['userid', 'user_id', 'id']);
+$nameColumn = first_existing_column($userColumns, ['full_name', 'name', 'display_name']);
 $emailColumn = first_existing_column($userColumns, ['email']);
 $firstNameColumn = first_existing_column($userColumns, ['first_name']);
 $middleNameColumn = first_existing_column($userColumns, ['middle_name', 'middle_initial']);
 $lastNameColumn = first_existing_column($userColumns, ['last_name']);
 $roleColumn = first_existing_column($userColumns, ['role']);
-$jurisdictionColumn = first_existing_column($userColumns, ['jurisdiction']);
-$statusColumn = first_existing_column($userColumns, ['status']);
-$lastActiveColumn = first_existing_column($userColumns, ['last_active', 'updated_at']);
+$jurisdictionColumn = first_existing_column($userColumns, ['juresdiction', 'jurisdiction', 'area', 'region', 'assignment', 'location']);
+$contactColumn = first_existing_column($userColumns, ['contact_number', 'phone_number', 'mobile_number', 'mobile', 'contact_no', 'phone', 'contact']);
+$statusColumn = first_existing_column($userColumns, ['account_status', 'status', 'user_status', 'is_active', 'active', 'state']);
+$lastActiveColumn = first_existing_column($userColumns, ['last_active', 'updated_at', 'last_login', 'last_seen']);
 $passwordColumn = first_existing_column($userColumns, ['password_hash', 'password']);
 
 if (
@@ -84,6 +91,7 @@ if (
         $postedMiddleName = trim((string) ($_POST['middle_name'] ?? ''));
         $postedLastName = trim((string) ($_POST['last_name'] ?? ''));
         $postedEmail = trim((string) ($_POST['email'] ?? ''));
+        $postedContact = trim((string) ($_POST['contact_number'] ?? ''));
         $postedJurisdiction = trim((string) ($_POST['jurisdiction'] ?? ''));
         $postedCurrentPassword = (string) ($_POST['current_password'] ?? '');
         $postedNewPassword = (string) ($_POST['new_password'] ?? '');
@@ -140,6 +148,11 @@ if (
             if ($emailColumn !== null) {
                 $updates[] = $emailColumn . ' = ?';
                 $params[] = $postedEmail;
+                $types .= 's';
+            }
+            if ($contactColumn !== null) {
+                $updates[] = $contactColumn . ' = ?';
+                $params[] = $postedContact;
                 $types .= 's';
             }
             if ($jurisdictionColumn !== null) {
@@ -215,6 +228,7 @@ if ($userId > 0 && $idColumn !== null) {
     $selectParts[] = $lastNameColumn !== null ? $lastNameColumn . ' AS last_name' : "'' AS last_name";
     $selectParts[] = $roleColumn !== null ? $roleColumn . ' AS role' : "'' AS role";
     $selectParts[] = $jurisdictionColumn !== null ? $jurisdictionColumn . ' AS jurisdiction' : "'' AS jurisdiction";
+    $selectParts[] = $contactColumn !== null ? $contactColumn . ' AS contact_number' : "'' AS contact_number";
     $selectParts[] = $statusColumn !== null ? $statusColumn . ' AS status' : "'' AS status";
     $selectParts[] = $lastActiveColumn !== null ? $lastActiveColumn . ' AS last_active' : "'' AS last_active";
 
@@ -235,14 +249,20 @@ if ($userId > 0 && $idColumn !== null) {
             $rowMiddleName = trim((string) ($row['middle_name'] ?? ''));
             $rowLastName = trim((string) ($row['last_name'] ?? ''));
             $rowRole = strtolower(trim((string) ($row['role'] ?? '')));
+            $rowContact = trim((string) ($row['contact_number'] ?? ''));
             $rowJurisdiction = trim((string) ($row['jurisdiction'] ?? ''));
             $rowStatus = trim((string) ($row['status'] ?? ''));
             $rowLastActive = trim((string) ($row['last_active'] ?? ''));
 
-            if ($rowFirstName !== '') $firstName = $rowFirstName;
-            if ($rowMiddleName !== '') $middleName = $rowMiddleName;
-            if ($rowLastName !== '') $lastName = $rowLastName;
-            if ($rowName !== '') $displayName = $rowName;
+            $firstName = $rowFirstName !== '' ? $rowFirstName : $firstName;
+            $middleName = $rowMiddleName !== '' ? $rowMiddleName : $middleName;
+            $lastName = $rowLastName !== '' ? $rowLastName : $lastName;
+            
+            if ($rowName !== '') {
+                $displayName = $rowName;
+            } else {
+                $displayName = trim(implode(' ', array_filter([$firstName, $middleName, $lastName])));
+            }
             
             if ($displayName === '' && ($firstName !== '' || $middleName !== '' || $lastName !== '')) {
                 $displayName = trim(implode(' ', array_filter([$firstName, $middleName, $lastName], static function ($value) {
@@ -252,6 +272,16 @@ if ($userId > 0 && $idColumn !== null) {
             if ($rowEmail !== '') $email = $rowEmail;
             if ($rowJurisdiction !== '') $jurisdiction = $rowJurisdiction;
             if ($rowStatus !== '') $status = $rowStatus;
+
+            // If the user is currently on this page, they are active.
+            if (strtolower($status) === 'offline' || $status === '') {
+                $status = 'Online';
+            }
+
+            // Enforce restricted jurisdiction label for IP Members
+            if ($currentRole === 'ip_member') {
+                $jurisdiction = 'Personal Information Only';
+            }
             
             if ($rowLastActive !== '') {
                 $timestamp = strtotime($rowLastActive);
@@ -264,8 +294,8 @@ if ($userId > 0 && $idColumn !== null) {
 
             if ($rowRole === 'admin' || $rowRole === 'system admin') {
                 $roleLabel = 'System Admin';
-            } elseif ($rowRole === 'tribe_leader' || $rowRole === 'tribe leader') {
-                $roleLabel = 'Tribe Leader';
+            } elseif ($rowRole === 'tribe_leader' || $rowRole === 'tribe leader' || $rowRole === 'elder') {
+                $roleLabel = 'Elder';
             } elseif ($rowRole !== '') {
                 $roleLabel = ucwords(str_replace('_', ' ', $rowRole));
             }
@@ -275,22 +305,102 @@ if ($userId > 0 && $idColumn !== null) {
     }
 }
 
+// Resolve the ip_member_id (member_key) early for phone number fallbacks
+$ipMemberColumns = [];
+$ipMemberColumnsResult = $conn->query('SHOW COLUMNS FROM ipmembers');
+if ($ipMemberColumnsResult instanceof mysqli_result) {
+    while ($ipColumn = $ipMemberColumnsResult->fetch_assoc()) {
+        $ipMemberColumns[] = $ipColumn['Field'];
+    }
+}
+$ipKeyColumn = first_existing_column($ipMemberColumns, ['ip_member_id', 'member_id', 'id']);
+$ipUserColumn = first_existing_column($ipMemberColumns, ['user_id']);
+$ipFirstNameColumn = first_existing_column($ipMemberColumns, ['first_name']);
+$ipMiddleNameColumn = first_existing_column($ipMemberColumns, ['middle_name']);
+$ipLastNameColumn = first_existing_column($ipMemberColumns, ['last_name']);
+$ipLegacyNameColumn = first_existing_column($ipMemberColumns, ['member_name', 'full_name', 'name']);
+
+if ($ipKeyColumn !== null && $ipUserColumn !== null && $userId > 0) {
+    $findMemberSql = "SELECT `{$ipKeyColumn}` AS member_key FROM ipmembers WHERE `{$ipUserColumn}` = ? LIMIT 1";
+    $findMemberStmt = $conn->prepare($findMemberSql);
+    if ($findMemberStmt) {
+        $findMemberStmt->bind_param('i', $userId);
+        $findMemberStmt->execute();
+        $findMemberResult = $findMemberStmt->get_result();
+        $findMemberRow = $findMemberResult instanceof mysqli_result ? $findMemberResult->fetch_assoc() : null;
+        $findMemberStmt->close();
+        if ($findMemberRow) {
+            $currentMemberKey = (string) ($findMemberRow['member_key'] ?? '');
+        }
+    }
+}
+
+if ($currentMemberKey === '' && $displayName !== '') {
+    $findByNameWhere = [];
+    if ($ipLegacyNameColumn !== null) $findByNameWhere[] = "TRIM(`{$ipLegacyNameColumn}`) = ?";
+    if ($ipFirstNameColumn !== null || $ipLastNameColumn !== null) {
+        $firstExpr = $ipFirstNameColumn !== null ? "`{$ipFirstNameColumn}`" : "''";
+        $middleExpr = $ipMiddleNameColumn !== null ? "`{$ipMiddleNameColumn}`" : "''";
+        $lastExpr = $ipLastNameColumn !== null ? "`{$ipLastNameColumn}`" : "''";
+        $findByNameWhere[] = "TRIM(CONCAT_WS(' ', {$firstExpr}, {$middleExpr}, {$lastExpr})) = ?";
+    }
+    if (!empty($findByNameWhere)) {
+        $findByNameSql = "SELECT `{$ipKeyColumn}` AS member_key FROM ipmembers WHERE " . implode(' OR ', $findByNameWhere) . ' LIMIT 1';
+        $findByNameStmt = $conn->prepare($findByNameSql);
+        if ($findByNameStmt) {
+            $pCount = count($findByNameWhere);
+            $pCount === 1 ? $findByNameStmt->bind_param('s', $displayName) : $findByNameStmt->bind_param('ss', $displayName, $displayName);
+            $findByNameStmt->execute();
+            $findByNameResult = $findByNameStmt->get_result();
+            $findByNameRow = $findByNameResult instanceof mysqli_result ? $findByNameResult->fetch_assoc() : null;
+            $findByNameStmt->close();
+            if ($findByNameRow) $currentMemberKey = (string) ($findByNameRow['member_key'] ?? '');
+        }
+    }
+}
+
+// Fallback: Fetch personal details (Mobile and Address) from the Tribal Registry
+if ($currentMemberKey !== '') {
+    // Look for standard registration contact and location columns
+    $detailSql = "SELECT mobile_number, barangay, specific_current_address FROM ip_member_details WHERE ip_member_id = ? LIMIT 1";
+    $dStmt = $conn->prepare($detailSql);
+    if ($dStmt) {
+        $dStmt->bind_param('s', $currentMemberKey);
+        $dStmt->execute();
+        $dRes = $dStmt->get_result();
+        if ($dRow = $dRes->fetch_assoc()) {
+            if ($contactNumber === 'N/A' || $contactNumber === '') {
+                $registryMobile = trim((string)($dRow['mobile_number'] ?? ''));
+                if ($registryMobile !== '') {
+                    $contactNumber = $registryMobile;
+                }
+            }
+
+            // Populate the specific current address and barangay
+            $brgy = trim((string)($dRow['barangay'] ?? ''));
+            $barangayOnly = ($brgy !== '') ? $brgy : 'N/A';
+
+            $sAddr = trim((string)($dRow['specific_current_address'] ?? ''));
+            $combined = trim(implode(', ', array_filter([$sAddr, $brgy])));
+            if ($combined !== '') {
+                $currentAddress = $combined;
+            }
+        }
+        $dStmt->close();
+    }
+}
+
 if ($firstName === '' || $lastName === '') {
+    if ($currentAddress === '') $currentAddress = 'N/A';
+    if ($jurisdiction === '') $jurisdiction = 'N/A';
     $namePartsFromDisplay = preg_split('/\s+/', trim($displayName));
+
     if ($firstName === '') $firstName = (string) ($namePartsFromDisplay[0] ?? '');
     if ($middleName === '' && count($namePartsFromDisplay) > 2) {
         $middleName = trim(implode(' ', array_slice($namePartsFromDisplay, 1, -1)));
     }
     if ($lastName === '' && count($namePartsFromDisplay) > 1) {
         $lastName = (string) $namePartsFromDisplay[count($namePartsFromDisplay) - 1];
-    }
-}
-
-$ipMemberColumns = [];
-$ipMemberColumnsResult = $conn->query('SHOW COLUMNS FROM ipmembers');
-if ($ipMemberColumnsResult instanceof mysqli_result) {
-    while ($ipColumn = $ipMemberColumnsResult->fetch_assoc()) {
-        $ipMemberColumns[] = $ipColumn['Field'];
     }
 }
 
@@ -301,13 +411,6 @@ if ($relationshipColumnsResult instanceof mysqli_result) {
         $relationshipColumns[] = $relColumn['Field'];
     }
 }
-
-$ipKeyColumn = first_existing_column($ipMemberColumns, ['ip_member_id', 'member_id', 'id']);
-$ipUserColumn = first_existing_column($ipMemberColumns, ['user_id']);
-$ipFirstNameColumn = first_existing_column($ipMemberColumns, ['first_name']);
-$ipMiddleNameColumn = first_existing_column($ipMemberColumns, ['middle_name']);
-$ipLastNameColumn = first_existing_column($ipMemberColumns, ['last_name']);
-$ipLegacyNameColumn = first_existing_column($ipMemberColumns, ['member_name', 'full_name', 'name']);
 
 $relMemberColumn = first_existing_column($relationshipColumns, ['ip_member_id', 'member_id', 'person_id']);
 $relRelatedColumn = first_existing_column($relationshipColumns, ['related_person_id', 'related_member_id', 'relative_id']);
@@ -339,54 +442,6 @@ if ($ipKeyColumn !== null && $relMemberColumn !== null && $relRelatedColumn !== 
                 $resolvedName = $memberLegacy !== '' ? $memberLegacy : ('Member #' . $memberKey);
             }
             $memberNameMap[$memberKey] = $resolvedName;
-        }
-    }
-
-    $currentMemberKey = '';
-    if ($ipUserColumn !== null && $userId > 0) {
-        $findMemberSql = "SELECT `{$ipKeyColumn}` AS member_key FROM ipmembers WHERE `{$ipUserColumn}` = ? LIMIT 1";
-        $findMemberStmt = $conn->prepare($findMemberSql);
-        if ($findMemberStmt) {
-            $findMemberStmt->bind_param('i', $userId);
-            $findMemberStmt->execute();
-            $findMemberResult = $findMemberStmt->get_result();
-            $findMemberRow = $findMemberResult instanceof mysqli_result ? $findMemberResult->fetch_assoc() : null;
-            $findMemberStmt->close();
-
-            if ($findMemberRow) {
-                $currentMemberKey = (string) ($findMemberRow['member_key'] ?? '');
-            }
-        }
-    }
-
-    if ($currentMemberKey === '' && $displayName !== '') {
-        $findByNameWhere = [];
-        if ($ipLegacyNameColumn !== null) $findByNameWhere[] = "TRIM(`{$ipLegacyNameColumn}`) = ?";
-        if ($ipFirstNameColumn !== null || $ipLastNameColumn !== null) {
-            $firstExpr = $ipFirstNameColumn !== null ? "`{$ipFirstNameColumn}`" : "''";
-            $middleExpr = $ipMiddleNameColumn !== null ? "`{$ipMiddleNameColumn}`" : "''";
-            $lastExpr = $ipLastNameColumn !== null ? "`{$ipLastNameColumn}`" : "''";
-            $findByNameWhere[] = "TRIM(CONCAT_WS(' ', {$firstExpr}, {$middleExpr}, {$lastExpr})) = ?";
-        }
-
-        if (!empty($findByNameWhere)) {
-            $findByNameSql = "SELECT `{$ipKeyColumn}` AS member_key FROM ipmembers WHERE " . implode(' OR ', $findByNameWhere) . ' LIMIT 1';
-            $findByNameStmt = $conn->prepare($findByNameSql);
-            if ($findByNameStmt) {
-                if (count($findByNameWhere) === 1) {
-                    $findByNameStmt->bind_param('s', $displayName);
-                } else {
-                    $findByNameStmt->bind_param('ss', $displayName, $displayName);
-                }
-                $findByNameStmt->execute();
-                $findByNameResult = $findByNameStmt->get_result();
-                $findByNameRow = $findByNameResult instanceof mysqli_result ? $findByNameResult->fetch_assoc() : null;
-                $findByNameStmt->close();
-
-                if ($findByNameRow) {
-                    $currentMemberKey = (string) ($findByNameRow['member_key'] ?? '');
-                }
-            }
         }
     }
 
@@ -444,11 +499,10 @@ $parentsLabel = !empty($familyParents) ? implode(', ', $familyParents) : 'None l
 $spousesLabel = !empty($familySpouses) ? implode(', ', $familySpouses) : 'None listed';
 $childrenLabel = !empty($familyChildren) ? implode(', ', $familyChildren) : 'None listed';
 
-$nameParts = preg_split('/\s+/', $displayName);
-$initials = strtoupper(substr((string) ($nameParts[0] ?? 'U'), 0, 1));
-if (!empty($nameParts[1])) {
-    $initials .= strtoupper(substr((string) $nameParts[1], 0, 1));
-}
+$cleanName = preg_replace('/[^A-Za-z\s]/', '', $displayName);
+$nameParts = preg_split('/\s+/', trim($cleanName));
+$initials = strtoupper(substr($nameParts[0] ?? 'U', 0, 1));
+$initials .= (count($nameParts) > 1) ? strtoupper(substr(end($nameParts), 0, 1)) : '';
 
 $statusClass = 'bg-neutral-100 text-neutral-600 border border-neutral-200/60';
 if (strtolower($status) === 'online') {
@@ -589,12 +643,12 @@ if (strtolower($status) === 'online') {
                                     <span class="truncate font-medium"><?php echo htmlspecialchars($email !== '' ? $email : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
                                 </div>
                                 <div class="flex items-center gap-2.5 text-neutral-600 hover:text-neutral-900 transition">
-                                    <i data-lucide="map-pin" class="w-4 h-4 text-neutral-400 flex-shrink-0"></i>
-                                    <span class="font-medium"><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
+                                    <i data-lucide="phone" class="w-4 h-4 text-neutral-400 flex-shrink-0"></i>
+                                    <span class="font-medium"><?php echo htmlspecialchars($contactNumber !== '' ? $contactNumber : 'N/A', ENT_QUOTES, 'UTF-8'); ?></span>
                                 </div>
                                 <div class="flex items-center gap-2.5 text-neutral-600 border-t border-neutral-100 pt-2.5 mt-1 text-[11px]">
-                                    <i data-lucide="clock" class="w-3.5 h-3.5 text-neutral-400 flex-shrink-0"></i>
-                                    <span class="text-neutral-400">Last Active: <span class="font-medium text-neutral-700"><?php echo htmlspecialchars($lastActive, ENT_QUOTES, 'UTF-8'); ?></span></span>
+                                    <i data-lucide="map-pin" class="w-3.5 h-3.5 text-neutral-400 flex-shrink-0"></i>
+                                    <span class="text-neutral-400">Location: <span class="font-medium text-neutral-700"><?php echo htmlspecialchars($barangayOnly, ENT_QUOTES, 'UTF-8'); ?></span></span>
                                 </div>
                             </div>
                         </div>
@@ -633,8 +687,12 @@ if (strtolower($status) === 'online') {
                                             <input id="email" name="email" type="email" value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium">
                                         </div>
                                         <div>
+                                            <label for="contact_number" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Contact Number</label>
+                                            <input id="contact_number" name="contact_number" type="text" value="<?php echo htmlspecialchars($contactNumber, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium">
+                                        </div>
+                                        <div>
                                             <label for="jurisdiction" class="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5">Jurisdiction Area</label>
-                                            <input id="jurisdiction" name="jurisdiction" type="text" value="<?php echo htmlspecialchars($jurisdiction, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium">
+                                            <input id="jurisdiction" name="jurisdiction" type="text" value="<?php echo htmlspecialchars($jurisdiction, ENT_QUOTES, 'UTF-8'); ?>" class="w-full bg-white border border-neutral-200 rounded-xl py-2 px-3.5 focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-950/5 transition text-sm text-neutral-800 font-medium" <?php echo ($currentRole === 'ip_member' ? 'readonly' : ''); ?>>
                                         </div>
                                     </div>
 
@@ -696,15 +754,15 @@ if (strtolower($status) === 'online') {
                                             <p class="font-semibold text-neutral-800 text-sm truncate"><?php echo htmlspecialchars($email !== '' ? $email : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
                                         </div>
                                         <div class="bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3">
-                                            <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-1">Assigned Jurisdiction</p>
-                                            <p class="font-semibold text-neutral-800 text-sm"><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
+                                            <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-1">Home Address</p>
+                                            <p class="font-semibold text-neutral-800 text-sm"><?php echo htmlspecialchars($currentAddress, ENT_QUOTES, 'UTF-8'); ?></p>
                                         </div>
                                         <div class="sm:col-span-2 bg-neutral-50/40 border border-neutral-200/40 rounded-xl p-3 flex items-center justify-between">
                                             <div>
-                                                <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-0.5">Last System Activity Timestamp</p>
-                                                <p class="font-semibold text-neutral-700"><?php echo htmlspecialchars($lastActive, ENT_QUOTES, 'UTF-8'); ?></p>
+                                                <p class="text-neutral-400 uppercase text-[9px] font-bold tracking-wider mb-0.5">Assigned Jurisdiction Area</p>
+                                                <p class="font-semibold text-neutral-700"><?php echo htmlspecialchars($jurisdiction !== '' ? $jurisdiction : 'N/A', ENT_QUOTES, 'UTF-8'); ?></p>
                                             </div>
-                                            <i data-lucide="calendar" class="w-4 h-4 text-neutral-300 mr-1.5"></i>
+                                            <i data-lucide="map-pin" class="w-4 h-4 text-neutral-300 mr-1.5"></i>
                                         </div>
                                     </div>
                                 </div>
