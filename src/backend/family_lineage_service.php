@@ -59,11 +59,7 @@ function resolve_selected_member_id($members, $requestedMemberId) {
     return '';
 }
 
-function filter_connected_family_component($members, $relationships, $selectedMemberId) {
-    if ($selectedMemberId === '') {
-        return [$members, $relationships];
-    }
-
+function build_relationship_adjacency(array $relationships): array {
     $adj = [];
     foreach ($relationships as $memberKey => $rel) {
         $allNeighbors = array_merge($rel['parents'], $rel['spouses'], $rel['children']);
@@ -82,7 +78,10 @@ function filter_connected_family_component($members, $relationships, $selectedMe
             $adj[$neighbor][$memberKey] = true;
         }
     }
+    return $adj;
+}
 
+function traverse_connected_ids(array $adj, string $startId): array {
     $visited = [];
     $dfs = function ($current) use (&$dfs, &$visited, $adj) {
         $current = (string) $current;
@@ -100,7 +99,17 @@ function filter_connected_family_component($members, $relationships, $selectedMe
         }
     };
 
-    $dfs((string) $selectedMemberId);
+    $dfs($startId);
+    return $visited;
+}
+
+function filter_connected_family_component($members, $relationships, $selectedMemberId) {
+    if ($selectedMemberId === '') {
+        return [$members, $relationships];
+    }
+
+    $adj = build_relationship_adjacency($relationships);
+    $visited = traverse_connected_ids($adj, (string) $selectedMemberId);
 
     $members = array_filter(
         $members,
