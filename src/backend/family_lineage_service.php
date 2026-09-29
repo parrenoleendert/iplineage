@@ -121,6 +121,30 @@ function filter_connected_family_component($members, $relationships, $selectedMe
     return [$members, $relationships];
 }
 
+function filter_member_relationships($relationships, $id, $members) {
+    $parents = isset($relationships[$id]['parents']) ? array_map('strval', $relationships[$id]['parents']) : [];
+    $spouses = isset($relationships[$id]['spouses']) ? array_map('strval', $relationships[$id]['spouses']) : [];
+    $children = isset($relationships[$id]['children']) ? array_map('strval', $relationships[$id]['children']): [];
+
+    $parents = array_values(array_filter($parents, function ($relId) use ($members) {
+        return isset($members[(string) $relId]);
+    }));
+
+    $spouses = array_values(array_filter($spouses, function ($relId) use ($members) {
+        return isset($members[(string) $relId]);
+    }));
+
+    $children = array_values(array_filter($children, function ($relId) use ($members) {
+        return isset($members[(string) $relId]);
+    }));
+
+    return [
+        'parents' => $parents,
+        'spouses' => $spouses,
+        'children' => $children
+    ];
+}
+
 function build_family_chart_data($members, $relationships, $selectedMemberId) {
     $familyData = [];
 
@@ -139,19 +163,11 @@ function build_family_chart_data($members, $relationships, $selectedMemberId) {
         $firstName = $names[0] ?? '';
         $lastName = isset($names[1]) ? implode(' ', array_slice($names, 1)) : '';
 
-        $parents = isset($relationships[$id]['parents']) ? array_map('strval', $relationships[$id]['parents']) : [];
-        $spouses = isset($relationships[$id]['spouses']) ? array_map('strval', $relationships[$id]['spouses']) : [];
-        $children = isset($relationships[$id]['children']) ? array_map('strval', $relationships[$id]['children']) : [];
-
-        $parents = array_values(array_filter($parents, function ($relId) use ($members) {
-            return isset($members[(string) $relId]);
-        }));
-        $spouses = array_values(array_filter($spouses, function ($relId) use ($members) {
-            return isset($members[(string) $relId]);
-        }));
-        $children = array_values(array_filter($children, function ($relId) use ($members) {
-            return isset($members[(string) $relId]);
-        }));
+        $memberRelationships = filter_member_relationships(
+            $relationships,
+            $id,
+            $members
+        );
 
         $familyData[] = [
             'id' => (string) $id,
@@ -163,11 +179,7 @@ function build_family_chart_data($members, $relationships, $selectedMemberId) {
                 'gender' => strtoupper((string) ($member['sex'] ?? 'U')),
                 'display_id' => $member['display_id'] ?? (string) $id
             ],
-            'rels' => [
-                'parents' => $parents,
-                'spouses' => $spouses,
-                'children' => $children
-            ]
+            'rels' => $memberRelationships
         ];
     }
 
