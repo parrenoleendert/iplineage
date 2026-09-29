@@ -194,32 +194,33 @@ function get_role_badge_class($role) {
     return 'role-badge-member border border-[#dedede]';
 }
 
+function get_days_since($dateString) {
+    $timestamp = strtotime($dateString);
+    if ($timestamp === false) {
+        return null;
+    }
+    $secondsAgo = max(0, time() - $timestamp);
+    return (int) floor($secondsAgo / 86400);
+}
+
 function get_last_active_label($lastActive, $status) {
     $status = strtolower(trim((string) $status));
     if ($status === 'online') {
         return 'Active now';
     }
-
     if (empty($lastActive)) {
         return 'No recent activity';
     }
-
-    $timestamp = strtotime((string) $lastActive);
-    if ($timestamp === false) {
+    $daysAgo = get_days_since($lastActive);
+    if ($daysAgo === null) {
         return 'No recent activity';
     }
-
-    $secondsAgo = max(0, time() - $timestamp);
-    $daysAgo = (int) floor($secondsAgo / 86400);
-
     if ($daysAgo <= 0) {
         return 'Active today';
     }
-
     if ($daysAgo > 7) {
         $daysAgo = 7;
     }
-
     $dayLabel = $daysAgo === 1 ? 'day' : 'days';
     return "Active {$daysAgo} {$dayLabel} ago";
 }
