@@ -26,8 +26,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($identifier === '' || $password === '') {
         $loginError = 'Please enter your username/email and password.';
+    } elseif (strlen($password) > 2560) {
+        $loginError = 'Password exceeds maximum allowed length.';
     } else {
         $columns = [];
+
         $columnResult = $conn->query('SHOW COLUMNS FROM users');
 
         if ($columnResult instanceof mysqli_result) {
