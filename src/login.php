@@ -24,9 +24,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $identifier = trim((string) ($_POST['identifier'] ?? ''));
     $password = (string) ($_POST['password'] ?? '');
 
-    if ($identifier === '' || $password === '') {
-        $loginError = 'Please enter your username/email and password.';
-    } else {
+        if ($identifier === '' || $password === '') {
+            $loginError = 'Please enter your username/email and password.';
+        } elseif (strlen($password) > 256) {
+            $loginError = 'Password exceeds maximum allowed length.';
+        } else {
         $columns = [];
         $columnResult = $conn->query('SHOW COLUMNS FROM users');
 
