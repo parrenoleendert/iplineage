@@ -23,12 +23,13 @@ $identifier = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $identifier = trim((string) ($_POST['identifier'] ?? ''));
     $password = (string) ($_POST['password'] ?? '');
-
-        if ($identifier === '' || $password === '') {
-            $loginError = 'Please enter your username/email and password.';
-        } elseif (strlen($password) > 256) {
-            $loginError = 'Password exceeds maximum allowed length.';
-        } else {
+    
+    const MAX_PASSWORD_LENGTH = 256;
+    if ($identifier === '' || $password === '') {
+        $loginError = 'Please enter your username/email and password.';
+    } elseif (strlen($password) > MAX_PASSWORD_LENGTH) {
+        $loginError = 'Password exceeds maximum allowed length.';
+    } else {
         $columns = [];
         $columnResult = $conn->query('SHOW COLUMNS FROM users');
 
@@ -195,7 +196,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="space-y-2">
                         <label class="text-sm font-semibold text-[#262626]">Password</label>
                         <div class="relative">
-                            <input id="passwordInput" name="password" type="password" placeholder="••••••••" 
+                            <input id="passwordInput" name="password" type="password" maxlength="256" placeholder="••••••••" 
                                 class="w-full bg-[#f3f4f1] border border-[#dedede] rounded-xl px-4 py-4 pr-12 focus:outline-none focus:ring-2 focus:ring-[#262626]/10 transition text-[#262626]">
 
                         </div>
